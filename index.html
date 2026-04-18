@@ -632,6 +632,30 @@
       return tex;
     }
 
+    // SPRITE TEXTURE — radial falloff disc used for the 3D depth
+    // overlay particles. Cached once per session. Soft edges read
+    // as glowing specks instead of square pixels under bloom.
+    let _spriteTex = null;
+    function buildSpriteTexture(){
+      if (_spriteTex) return _spriteTex;
+      const s = 64;
+      const cvs = document.createElement('canvas');
+      cvs.width = s; cvs.height = s;
+      const ctx = cvs.getContext('2d');
+      const g = ctx.createRadialGradient(s/2, s/2, 0, s/2, s/2, s/2);
+      g.addColorStop(0.00, 'rgba(255,255,255,1.0)');
+      g.addColorStop(0.35, 'rgba(255,255,255,0.55)');
+      g.addColorStop(0.75, 'rgba(255,255,255,0.08)');
+      g.addColorStop(1.00, 'rgba(255,255,255,0.0)');
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, s, s);
+      _spriteTex = new THREE.CanvasTexture(cvs);
+      _spriteTex.minFilter = THREE.LinearFilter;
+      _spriteTex.magFilter = THREE.LinearFilter;
+      _spriteTex.needsUpdate = true;
+      return _spriteTex;
+    }
+
     // Shader: starfield vacuum + central pulse (scene 1 placeholder)
     // Vertex emits vUv (0..1 across the fullscreen plane) — DPR-invariant,
     // which is how we avoid the gl_FragCoord/iResolution DPR trap.
@@ -1535,6 +1559,71 @@
         this.caPass = new ShaderPass(caShader);
         this.composer.addPass(this.caPass);
         this.composer.addPass(new OutputPass());
+
+        // ─── DEPTH OVERLAY ───────────────────────────────────────
+        // A small Three.js scene with a PerspectiveCamera rendered ON TOP
+        // of the composer output (autoClear=false). Particles fly past
+        // the camera from far to near, giving the shader tunnel real 3D
+        // parallax. Lives behind its own scene/camera so it doesn't
+        // interfere with the existing ortho fullscreen-quad pipeline.
+        this._initDepthLayer();
+      }
+
+      _initDepthLayer() {
+        this.fgScene  = new THREE.Scene();
+        this.fgCamera = new THREE.PerspectiveCamera(70, innerWidth / Math.max(1, innerHeight), 0.1, 200);
+        this.fgCamera.position.set(0, 0, 0);
+        this.fgCamera.lookAt(0, 0, -1);
+        const N = 900;
+        const pos = new Float32Array(N * 3);
+        for (let i = 0; i < N; i++) {
+          const ang = Math.random() * Math.PI * 2;
+          // Annular radius — keep particles outside the tunnel core so
+          // the center of the shader scene stays readable.
+          const r = 1.4 + Math.random() * 5.5;
+          pos[i*3]   = Math.cos(ang) * r;
+          pos[i*3+1] = Math.sin(ang) * r;
+          pos[i*3+2] = -0.5 - Math.random() * 35;
+        }
+        const geom = new THREE.BufferGeometry();
+        geom.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+        this.particles = new THREE.Points(geom, new THREE.PointsMaterial({
+          // Soft sprite texture so points read as glowing specks, not 1-pixel dust.
+          map: buildSpriteTexture(),
+          size: 0.55,
+          transparent: true,
+          opacity: 1.0,
+          depthTest: false,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+          color: 0xffffff,
+          sizeAttenuation: true,
+        }));
+        this.fgScene.add(this.particles);
+      }
+
+      _updateDepthLayer(dt, kick, bass) {
+        if (!this.particles) return;
+        const pos = this.particles.geometry.attributes.position.array;
+        // Flow speed: baseline drift + bass-reactive surge. On a big bass
+        // the particle field accelerates, reinforcing the tunnel rush.
+        const speed = 6 + bass * 22;
+        for (let i = 0; i < pos.length; i += 3) {
+          pos[i+2] += speed * dt;
+          if (pos[i+2] > 0.5) {
+            // Loop back to far — re-roll position so the field doesn't
+            // settle into visible columns.
+            pos[i+2] = -35;
+            const ang = Math.random() * Math.PI * 2;
+            const r = 1.4 + Math.random() * 5.5;
+            pos[i]   = Math.cos(ang) * r;
+            pos[i+1] = Math.sin(ang) * r;
+          }
+        }
+        this.particles.geometry.attributes.position.needsUpdate = true;
+        // Tint to current palette accent — particles track the section.
+        this.particles.material.color.copy(this.uniforms.iPaletteAccent.value);
+        this.particles.material.size = 0.45 + kick * 0.35;
       }
 
       setBannerText(text) {
@@ -1547,6 +1636,10 @@
         this.composer.setSize(innerWidth, innerHeight);
         this.uniforms.iResolution.value.set(innerWidth, innerHeight);
         this._resizeWaveCanvas();
+        if (this.fgCamera) {
+          this.fgCamera.aspect = innerWidth / Math.max(1, innerHeight);
+          this.fgCamera.updateProjectionMatrix();
+        }
       }
 
       _resizeWaveCanvas() {
@@ -1737,6 +1830,12 @@
         });
 
         this.composer.render();
+        // Depth overlay: additive Three.js scene on top of the composer
+        // output. autoClear=false preserves the shader pass behind it.
+        this._updateDepthLayer(dt, state.laserEnv, state.env.bass);
+        this.renderer.autoClear = false;
+        this.renderer.render(this.fgScene, this.fgCamera);
+        this.renderer.autoClear = true;
         this._drawWaveBars();
       }
     }
