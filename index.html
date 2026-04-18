@@ -500,7 +500,7 @@
         float cellHue   = fract(angBin / 12.0 + iTime*0.04 + iMid*0.15 + hueWob);
         vec3 cellRainbow = 0.5 + 0.5 * cos(6.2832 * (cellHue + vec3(0.0, 0.33, 0.67)));
         vec3 cellCol = mix(vec3(1.0, 0.85, 0.45), cellRainbow, 0.55 + iAir*0.4);
-        col += cellCol * streakRadial * tunnelFade * (0.25 + iAir*0.8 + iKick*0.9);
+        col += cellCol * streakRadial * tunnelFade * (0.25 + iAir*0.55 + iKick*0.30);
 
         // ─── SIGNAL PULSE — a narrow front travels near→far through the
         // tunnel every few seconds, tinting cells cyan-green as it passes.
@@ -510,9 +510,9 @@
         float pulseFront = mix(0.8, 7.0, pulsePhase);                // depth range it sweeps
         float pulseBand  = smoothstep(0.35, 0.05, abs(depth - pulseFront));
         vec3  pulseTint  = vec3(0.25, 1.00, 0.75);                   // cyan-green
-        // Pulse band is the "current moment" marker — pumping harder on kicks
-        // and loud bass makes it obvious where in the tube the energy lives.
-        col += pulseTint * pulseBand * streakRadial * tunnelFade * (0.55 + iBass*0.4 + iKick*0.8);
+        // Pulse band is the "current moment" marker — modest kick boost so it
+        // punches visibly on transients without blowing the bloom pass out.
+        col += pulseTint * pulseBand * streakRadial * tunnelFade * (0.55 + iBass*0.3 + iKick*0.3);
 
         // ─── TRON BITS — a handful of glowing points that fly through
         // the tube, far→near, on staggered lifecycles. Each bit picks a
@@ -650,11 +650,12 @@
         // (Seed hue is hoisted to the top of main() for forward-ref use.)
         // ═══════════════════════════════════════════════════════
         float pulse = 0.15 + iSub*0.45 + iBass*0.25;
-        // Three-layer glow: tight core + medium halo + soft wash. Small static
-        // base keeps a visible gradient even on silence; audio drive punches it.
-        float core = exp(-r*r * (36.0 - pulse*14.0)) * (0.22 + pulse*0.75);
-        float halo = exp(-r*r * 6.5) * (0.05 + pulse*0.30);
-        float wash = exp(-r*r * 1.8) * (0.015 + pulse*0.12);
+        // Three-layer glow: tight core + medium halo + soft wash. Halo/wash are
+        // kept modest because all three gaussians peak at r=0 and UnrealBloom
+        // amplifies the sum — too much here and the center goes nuclear white.
+        float core = exp(-r*r * (36.0 - pulse*14.0)) * (0.22 + pulse*0.55);
+        float halo = exp(-r*r * 6.5)  * (0.035 + pulse*0.14);
+        float wash = exp(-r*r * 1.8)  * (0.010 + pulse*0.05);
         col += seed * (core + halo + wash);
 
         // outer ring ripple, bass-driven — inherits the shifted seed hue
