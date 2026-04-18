@@ -41,7 +41,7 @@
   .pill.b{background:var(--lcars-b)}
   .pill.c{background:var(--lcars-c)}
   .pill.d{background:var(--lcars-d)}
-  .pill.muted{background:transparent;border:1px solid var(--ink-dim);color:var(--ink-dim)}
+  .pill.muted{background:rgba(10,16,24,0.55);border:1px solid rgba(230,241,255,0.35);color:var(--ink)}
   .pill.grow{flex:1}
   .pill small{opacity:0.75;font-weight:400;margin-left:8px;letter-spacing:0.1em}
 
@@ -143,6 +143,11 @@
     body{grid-template-columns:72px 1fr}
     .scene-label{left:82px}
     .hdr .pill{padding:0 10px}
+  }
+  /* Narrow viewports: stop the lead pill (current track title) from overflowing
+     adjacent pills — let it shrink and ellipsis-truncate instead. */
+  @media (max-width:900px){
+    .hdr .pill.lead{min-width:0 !important;overflow:hidden;text-overflow:ellipsis;flex:0 1 auto;max-width:38vw}
   }
 </style>
 </head>
@@ -1313,17 +1318,24 @@
         // Fullscreen toggle — requests on the whole document so LCARS chrome goes
         // fullscreen too (not just the canvas). fullscreenchange keeps the label
         // in sync with any exit path (Escape, browser UI, programmatic).
+        // Label is responsive: narrow rails (≤900px) can't fit "FULLSCREEN" at
+        // their reduced width, so we fall back to "FULL" / "EXIT".
+        const fsLabel = () => {
+          const on = !!document.fullscreenElement;
+          const small = window.matchMedia('(max-width:900px)').matches;
+          this.btnFullscreen.textContent = on ? (small ? 'EXIT' : 'EXIT FS')
+                                              : (small ? 'FULL' : 'FULLSCREEN');
+          this.btnFullscreen.classList.toggle('active', on);
+        };
+        fsLabel();
         this.btnFullscreen.addEventListener('click', async () => {
           try {
             if (document.fullscreenElement) await document.exitFullscreen();
             else await document.documentElement.requestFullscreen();
           } catch (e) { console.warn('fullscreen toggle failed:', e); }
         });
-        document.addEventListener('fullscreenchange', () => {
-          const on = !!document.fullscreenElement;
-          this.btnFullscreen.textContent = on ? 'EXIT FS' : 'FULLSCREEN';
-          this.btnFullscreen.classList.toggle('active', on);
-        });
+        document.addEventListener('fullscreenchange', fsLabel);
+        window.addEventListener('resize', fsLabel);
       }
 
       _wireVolume() {
