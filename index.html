@@ -1115,10 +1115,7 @@
     let fps = 60, fpsAccum = 0, fpsFrames = 0;
     let lastSectionT = -1;
 
-    function tick(now){
-      const dt = Math.min(0.05, (now - last)/1000);
-      last = now;
-
+    function renderFrame(dt){
       const t = audioSource.currentTime || 0;
       const dur = audioSource.duration || 193.8;
 
@@ -1201,6 +1198,12 @@
       });
 
       gfx.composer.render();
+    }
+
+    function tick(now){
+      const dt = Math.min(0.05, (now - last)/1000);
+      last = now;
+      renderFrame(dt);
       requestAnimationFrame(tick);
     }
     requestAnimationFrame(tick);
