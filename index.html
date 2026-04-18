@@ -257,27 +257,10 @@
     const drift = { x: 0, y: 0, vx: 0, vy: 0 };
     let lastDriftKick = -10;
 
-    // `srcNode` is created lazily. On file:// with the bundled mp3 we deliberately
-    // skip MediaElementSource creation — Chrome treats every file:// file as its own
-    // origin, so `createMediaElementSource(audio)` taints and produces silent output.
-    // Skipping it lets the <audio> element play through its own default output (which
-    // works fine on file://) while the visual runs on pre-computed bands. Once the
-    // user drops a file, the blob: URL is same-origin to the page, so we wire up the
-    // real WebAudio graph then and live FFT comes back.
     function ensureAudioGraph() {
-      if (!ac) {
-        const Ctx = window.AudioContext || window.webkitAudioContext;
-        ac = new Ctx();
-      }
-      if (srcNode) return; // already wired — createMediaElementSource can only run once per element
-      const unsafeSrc = location.protocol === 'file:'
-                       && audio.src
-                       && !audio.src.startsWith('blob:');
-      if (unsafeSrc) {
-        // bypass mode — audio element plays directly, no analyser
-        analyser = null;
-        return;
-      }
+      if (ac) return;
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      ac = new Ctx();
       srcNode  = ac.createMediaElementSource(audio);
       analyser = ac.createAnalyser();
       analyser.fftSize = fftSize;
@@ -667,14 +650,11 @@
         // (Seed hue is hoisted to the top of main() for forward-ref use.)
         // ═══════════════════════════════════════════════════════
         float pulse = 0.15 + iSub*0.45 + iBass*0.25;
-        // Core: tight, bright, pulses with sub/bass.
+        // Three-layer glow: tight core + medium halo + soft wash. Small static
+        // base keeps a visible gradient even on silence; audio drive punches it.
         float core = exp(-r*r * (36.0 - pulse*14.0)) * (0.22 + pulse*0.75);
-        // Halo: wider gaussian with visible inside→outside gradient, makes the
-        // seed read as a glowing body rather than a pinpoint. Sigma ≈ 2x core.
-        float halo = exp(-r*r * 6.5) * (0.12 + pulse*0.22);
-        // Outer wash: very soft far-field so the darkening extends into the
-        // tunnel mouth. Gives the gradient its "apparent" body.
-        float wash = exp(-r*r * 1.8) * (0.04 + pulse*0.07);
+        float halo = exp(-r*r * 6.5) * (0.05 + pulse*0.30);
+        float wash = exp(-r*r * 1.8) * (0.015 + pulse*0.12);
         col += seed * (core + halo + wash);
 
         // outer ring ripple, bass-driven — inherits the shifted seed hue
@@ -813,13 +793,14 @@
 
     sessDate.textContent = new Date().toISOString().slice(0,10).replace(/-/g,'.');
 
-    // file:// note — Chrome treats every file:// file as its own origin, so we bypass
-    // MediaElementSource for the bundled track (see ensureAudioGraph). Audio plays
-    // through the <audio> element directly; the visual will be flat on the bundled
-    // track only. Drop any MP3 or serve via HTTP for the full reactive experience.
+    // file:// trap — Chrome treats every file:// file as its own origin, so routing
+    // the bundled mp3 through createMediaElementSource mutes the graph (cross-origin
+    // taint). Result: ENGAGE on the bundled track gives silent playback + zero FFT.
+    // Dropped files are fine (blob: is same-origin to the page). Warn proactively
+    // so this isn't a silent dead-end — drop an mp3 or serve over HTTP.
     if (location.protocol === 'file:') {
-      bootSub.textContent = 'FILE:// — BUNDLED VISUAL IS FLAT · DROP ANY MP3 FOR FULL REACTIVITY';
-      bootSub.style.color = 'var(--lcars-b)';
+      bootSub.textContent = 'FILE:// — BUNDLED TRACK WILL BE SILENT · DROP ANY MP3 OR SERVE VIA HTTP';
+      bootSub.style.color = 'var(--lcars-e)';
     }
 
     function fmt(s){ s = Math.max(0,s|0); return Math.floor(s/60)+':'+String(s%60).padStart(2,'0'); }
