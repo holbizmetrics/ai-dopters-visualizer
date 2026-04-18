@@ -233,14 +233,132 @@
     import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 
     // ═══════════════════════════════════════════════════════════
-    // 1 · AUDIO — Web Audio graph, live analyser, envelope followers
+    // 1 · AUDIO — AudioSource class owns everything audio-related
     // ═══════════════════════════════════════════════════════════
-    const audio = document.getElementById('audio');
-    let ac, analyser, srcNode;
-    const fftSize = 2048;
-    const freqBins = fftSize / 2;
-    const freqData = new Uint8Array(freqBins);
-    const timeData = new Uint8Array(fftSize);
+    //
+    // Encapsulates the <audio> element, the WebAudio graph, the FFT analyser,
+    // and the file:// cross-origin trap. The UI talks to this class only
+    // through methods + events — no direct access to `ac`/`analyser`/etc. The
+    // Visualizer tick loop reads `getBandEnergies()` each frame.
+    //
+    // Events (via EventTarget): 'play' | 'pause' | 'ended' | 'error' |
+    // 'volumechange' | 'ingested' (detail = {name, objectURL, file}) |
+    // 'engaged'.
+    //
+    // file:// trap: `createMediaElementSource` taints the graph when the
+    // source is cross-origin, and Chrome treats every file:// file as its
+    // own origin. The taint is *sticky* — once wired to a tainted source,
+    // later src swaps also play silent. `isGraphSafe` tells the UI whether
+    // engaging now is safe; the UI gates the ENGAGE button on file:// until
+    // the user drops a file (blob URLs are same-origin = safe).
+    class AudioSource extends EventTarget {
+      constructor(audioElement) {
+        super();
+        this.el = audioElement;
+        this.ac = null;
+        this.srcNode = null;
+        this.analyser = null;
+        this.fftSize = 2048;
+        this.freqBins = this.fftSize / 2;
+        this.freqData = new Uint8Array(this.freqBins);
+        this.objectURL = null;
+        for (const evt of ['play','pause','ended','error','volumechange','loadedmetadata']) {
+          this.el.addEventListener(evt, () => this.dispatchEvent(new Event(evt)));
+        }
+      }
+
+      get isGraphSafe() {
+        const src = this.el.currentSrc || this.el.src;
+        if (!src) return false;
+        if (src.startsWith('blob:')) return true;
+        if (location.protocol === 'file:') return false;
+        return true;
+      }
+
+      get isEngaged()  { return !!this.ac; }
+      get currentTime(){ return this.el.currentTime; }
+      get duration()   { return this.el.duration; }
+      get ended()      { return this.el.ended; }
+      get paused()     { return this.el.paused; }
+      get muted()      { return this.el.muted; }
+      get sampleRate() { return this.ac ? this.ac.sampleRate : 44100; }
+
+      _ensureGraph() {
+        if (this.ac) return;
+        const Ctx = window.AudioContext || window.webkitAudioContext;
+        this.ac = new Ctx();
+        this.srcNode = this.ac.createMediaElementSource(this.el);
+        this.analyser = this.ac.createAnalyser();
+        this.analyser.fftSize = this.fftSize;
+        this.analyser.smoothingTimeConstant = 0.2;
+        this.srcNode.connect(this.analyser);
+        this.analyser.connect(this.ac.destination);
+      }
+
+      async engage() {
+        this._ensureGraph();
+        if (this.ac.state === 'suspended') await this.ac.resume();
+        if (this.el.readyState < 2) {
+          try { this.el.load(); } catch (e) {}
+          await new Promise((resolve) => {
+            let done = false;
+            const settle = () => { if (done) return; done = true; resolve(); };
+            this.el.addEventListener('canplay', settle, { once: true });
+            this.el.addEventListener('error',   settle, { once: true });
+            setTimeout(settle, 2500);
+          });
+        }
+        await this.el.play();
+        this.dispatchEvent(new CustomEvent('engaged'));
+      }
+
+      async ingestFile(file) {
+        if (!file) return null;
+        if (!file.type.startsWith('audio/') && !/\.(mp3|wav|ogg|m4a|flac|aac)$/i.test(file.name)) return null;
+        if (this.objectURL) URL.revokeObjectURL(this.objectURL);
+        this.objectURL = URL.createObjectURL(file);
+        this.el.pause();
+        this.el.src = this.objectURL;
+        this.el.load();
+        const name = file.name.replace(/\.[^.]+$/, '').toUpperCase().slice(0, 48);
+        const meta = { name, objectURL: this.objectURL, file };
+        this.dispatchEvent(new CustomEvent('ingested', { detail: meta }));
+        return meta;
+      }
+
+      async play()    { if (!this.el.ended) await this.el.play(); }
+      pause()         { this.el.pause(); }
+      async restart() {
+        try { this.el.currentTime = 0; } catch (e) {}
+        if (this.ac && this.ac.state === 'suspended') await this.ac.resume();
+        if (this.el.paused || this.el.ended) await this.el.play();
+      }
+      toggleMute() {
+        this.el.muted = !this.el.muted;
+        return this.el.muted;
+      }
+      setVolume(pct) {
+        const v = Math.max(0, Math.min(1, pct/100));
+        this.el.volume = v;
+        if (v > 0 && this.el.muted) this.el.muted = false;
+      }
+
+      getBandEnergies() {
+        if (!this.analyser) return { sub: 0, bass: 0, mid: 0, air: 0 };
+        this.analyser.getByteFrequencyData(this.freqData);
+        const sr = this.ac.sampleRate;
+        const band = (lo, hi) => {
+          const binAt = (hz) => Math.max(0, Math.min(this.freqBins-1, Math.round(hz * this.fftSize / sr)));
+          const a = binAt(lo), b = binAt(hi);
+          let sum = 0;
+          for (let i = a; i <= b; i++) sum += this.freqData[i];
+          return sum / Math.max(1, b - a + 1) / 255;
+        };
+        return { sub: band(20,80), bass: band(80,250), mid: band(250,4000), air: band(4000,16000) };
+      }
+    }
+
+    const audioSource = new AudioSource(document.getElementById('audio'));
 
     // Envelope followers (smoothed, attack/release per band)
     const env = { sub:0, bass:0, mid:0, air:0 };
@@ -256,31 +374,6 @@
     // not a shake. Spring+damper returns the camera to center between kicks.
     const drift = { x: 0, y: 0, vx: 0, vy: 0 };
     let lastDriftKick = -10;
-
-    function ensureAudioGraph() {
-      if (ac) return;
-      const Ctx = window.AudioContext || window.webkitAudioContext;
-      ac = new Ctx();
-      srcNode  = ac.createMediaElementSource(audio);
-      analyser = ac.createAnalyser();
-      analyser.fftSize = fftSize;
-      analyser.smoothingTimeConstant = 0.2;
-      srcNode.connect(analyser);
-      analyser.connect(ac.destination);
-    }
-
-    // Map frequency (Hz) to FFT bin index given sampleRate and fftSize
-    function binAt(hz, sampleRate) {
-      return Math.max(0, Math.min(freqBins-1, Math.round(hz * fftSize / sampleRate)));
-    }
-
-    function bandEnergy(lowHz, highHz, sampleRate) {
-      const lo = binAt(lowHz, sampleRate);
-      const hi = binAt(highHz, sampleRate);
-      let sum = 0;
-      for (let i = lo; i <= hi; i++) sum += freqData[i];
-      return sum / Math.max(1, hi - lo + 1) / 255; // 0..1
-    }
 
     // ═══════════════════════════════════════════════════════════
     // 3 · THREE.JS SCENE — fullscreen plane with fragment shader
@@ -810,8 +903,8 @@
     function fmt(s){ s = Math.max(0,s|0); return Math.floor(s/60)+':'+String(s%60).padStart(2,'0'); }
 
     // Audio error visibility — an audio that never loads makes ENGAGE a silent dead-end. Surface it.
-    audio.addEventListener('error', (e) => {
-      const err = audio.error;
+    audioSource.addEventListener('error', () => {
+      const err = audioSource.el.error;
       const code = err ? err.code : '?';
       console.warn('audio element error', code, err);
       if (!boot.classList.contains('hidden')) {
@@ -825,20 +918,7 @@
       const prevLabel = engageBtn.textContent;
       engageBtn.textContent = '· · · ENGAGING · · ·';
       try {
-        ensureAudioGraph();
-        if (ac && ac.state === 'suspended') await ac.resume();
-        // If readyState is 0, the source hasn't loaded. Kick a load and wait briefly.
-        if (audio.readyState < 2) {
-          try { audio.load(); } catch (e) {}
-          await new Promise((resolve) => {
-            let done = false;
-            const settle = () => { if (done) return; done = true; resolve(); };
-            audio.addEventListener('canplay', settle, { once: true });
-            audio.addEventListener('error',   settle, { once: true });
-            setTimeout(settle, 2500); // don't hang forever
-          });
-        }
-        await audio.play();
+        await audioSource.engage();
         boot.classList.add('hidden');
         sceneLabel.classList.add('on');
       } catch (err) {
@@ -853,21 +933,12 @@
     // ═══════════════════════════════════════════════════════════
     // UNIVERSAL AUDIO INGEST — file picker + global drag/drop
     // ═══════════════════════════════════════════════════════════
-    let currentObjectURL = null;
-
     async function ingestAudioFile(file) {
-      if (!file) return;
-      if (!file.type.startsWith('audio/') && !/\.(mp3|wav|ogg|m4a|flac|aac)$/i.test(file.name)) {
-        console.warn('File rejected — not audio:', file.name, file.type);
+      const meta = await audioSource.ingestFile(file);
+      if (!meta) {
+        if (file) console.warn('File rejected — not audio:', file.name, file.type);
         return;
       }
-      // Swap audio source
-      if (currentObjectURL) URL.revokeObjectURL(currentObjectURL);
-      currentObjectURL = URL.createObjectURL(file);
-      audio.pause();
-      audio.removeAttribute('crossorigin');   // blob URLs are same-origin
-      audio.src = currentObjectURL;
-      audio.load();
 
       // Custom track → drop the hardcoded section timeline. Live FFT carries
       // the visual (pre-computed bands path was removed earlier in sprint 1).
@@ -875,19 +946,19 @@
       sections.push({ t: 0.0, label: 'CUSTOM TRACK · LIVE FFT' });
 
       // Update labels to reflect custom track (and clear any prior error state)
-      const name = file.name.replace(/\.[^.]+$/, '').toUpperCase().slice(0, 48);
-      bootTitle.textContent = name || 'CUSTOM INGEST';
+      bootTitle.textContent = meta.name || 'CUSTOM INGEST';
       bootSub.textContent   = 'LCARS · AV CORE · AUDIO INGESTED · PRESS ENGAGE';
       bootSub.style.color   = '';
       engageBtn.disabled    = false;
       engageBtn.textContent = '▶ ENGAGE';
-      if (headerLead) headerLead.textContent = name || 'CUSTOM TRACK';
+      if (headerLead) headerLead.textContent = meta.name || 'CUSTOM TRACK';
 
       // If already past boot (user dropped mid-play), resume immediately
       if (boot.classList.contains('hidden')) {
-        ensureAudioGraph();
-        if (ac.state === 'suspended') await ac.resume();
-        try { await audio.play(); btnPlayPause.textContent = 'PAUSE'; } catch (e) {}
+        try {
+          await audioSource.engage();
+          btnPlayPause.textContent = 'PAUSE';
+        } catch (e) {}
       }
     }
 
@@ -945,48 +1016,44 @@
     });
 
     btnPlayPause.addEventListener('click', async () => {
-      if (!ac) return;
-      // After the track ends, audio.paused is true — native play() would restart
+      if (!audioSource.isEngaged) return;
+      // After the track ends, paused is true — native play() would restart
       // from 0, which feels wrong. Ignore; user must hit RESTART explicitly.
-      if (audio.ended) return;
-      if (audio.paused) { await audio.play(); btnPlayPause.textContent='PAUSE'; }
-      else { audio.pause(); btnPlayPause.textContent='PLAY'; }
+      if (audioSource.ended) return;
+      if (audioSource.paused) { await audioSource.play(); btnPlayPause.textContent='PAUSE'; }
+      else { audioSource.pause(); btnPlayPause.textContent='PLAY'; }
     });
-    // Reflect end-of-track in the button so it's clearly non-interactive.
-    audio.addEventListener('ended', () => { btnPlayPause.textContent = 'ENDED'; });
-    audio.addEventListener('play',  () => { btnPlayPause.textContent = 'PAUSE'; });
+    // Reflect end-of-track + play in the button so it's clearly non-interactive.
+    audioSource.addEventListener('ended', () => { btnPlayPause.textContent = 'ENDED'; });
+    audioSource.addEventListener('play',  () => { btnPlayPause.textContent = 'PAUSE'; });
+    audioSource.addEventListener('pause', () => {
+      if (!audioSource.ended) btnPlayPause.textContent = 'PLAY';
+    });
     btnRestart.addEventListener('click', async () => {
-      try { audio.currentTime = 0; } catch (e) {}
-      if (ac && ac.state === 'suspended') await ac.resume();
-      if (audio.paused || audio.ended) {
-        try { await audio.play(); btnPlayPause.textContent = 'PAUSE'; } catch (e) {}
-      }
+      try { await audioSource.restart(); btnPlayPause.textContent = 'PAUSE'; } catch (e) {}
     });
     btnMute.addEventListener('click', () => {
-      audio.muted = !audio.muted;
-      btnMute.textContent = audio.muted ? 'UNMUTE' : 'MUTE';
-      btnMute.classList.toggle('active', audio.muted);
+      const muted = audioSource.toggleMute();
+      btnMute.textContent = muted ? 'UNMUTE' : 'MUTE';
+      btnMute.classList.toggle('active', muted);
+    });
+    audioSource.addEventListener('volumechange', () => {
+      btnMute.textContent = audioSource.muted ? 'UNMUTE' : 'MUTE';
+      btnMute.classList.toggle('active', audioSource.muted);
     });
 
-    // — Volume slider — lives on audio.volume (0..1). Persists across track swaps.
+    // — Volume slider — drives audioSource.setVolume(). Persists across track swaps.
     const volSlider = document.getElementById('volSlider');
     const volVal    = document.getElementById('volVal');
     function applyVolume(pct){
-      const v = Math.max(0, Math.min(1, pct/100));
-      audio.volume = v;
+      audioSource.setVolume(pct);
       volVal.textContent = String(pct|0);
       volSlider.style.setProperty('--vol-pct', (pct|0)+'%');
-      // Auto-unmute when user drags up from zero while muted
-      if (v > 0 && audio.muted) {
-        audio.muted = false;
-        btnMute.textContent = 'MUTE';
-        btnMute.classList.remove('active');
-      }
     }
     applyVolume(parseInt(volSlider.value,10));
     volSlider.addEventListener('input', (e) => applyVolume(parseInt(e.target.value,10)));
 
-    audio.addEventListener('loadedmetadata', () => { tTot.textContent = fmt(audio.duration); });
+    audioSource.addEventListener('loadedmetadata', () => { tTot.textContent = fmt(audioSource.duration); });
 
     addEventListener('resize', () => {
       renderer.setSize(innerWidth, innerHeight, false);
@@ -1005,22 +1072,18 @@
       const dt = Math.min(0.05, (now - last)/1000);
       last = now;
 
-      const t = audio.currentTime || 0;
-      const dur = audio.duration || 193.8;
+      const t = audioSource.currentTime || 0;
+      const dur = audioSource.duration || 193.8;
 
-      // Live FFT → band energies. When analyser is absent (file:// bundled-track
-      // bypass) everything stays at zero — visual runs flat with only ambient
-      // breath. Drop any MP3 to get the full reactive experience.
-      if (analyser) {
-        const sr = ac.sampleRate;
-        analyser.getByteFrequencyData(freqData);
-        envTarget.sub  = bandEnergy(20,    80,   sr);
-        envTarget.bass = bandEnergy(80,    250,  sr);
-        envTarget.mid  = bandEnergy(250,   4000, sr);
-        envTarget.air  = bandEnergy(4000, 16000, sr);
-      } else {
-        envTarget.sub = envTarget.bass = envTarget.mid = envTarget.air = 0;
-      }
+      // Live FFT → band energies. When analyser is absent (not yet engaged,
+      // or file:// bundled-track pre-drop) everything stays at zero — visual
+      // runs flat with only ambient breath. Drop any MP3 to get the full
+      // reactive experience.
+      const bands = audioSource.getBandEnergies();
+      envTarget.sub  = bands.sub;
+      envTarget.bass = bands.bass;
+      envTarget.mid  = bands.mid;
+      envTarget.air  = bands.air;
 
       // Envelope follower: fast attack, slower release
       for (const k of ['sub','bass','mid','air']) {
