@@ -64,8 +64,8 @@
   .track .t{font-variant-numeric:tabular-nums;font-weight:700;font-size:12px;min-width:9ch;text-align:right}
 
   /* — SCENE LABEL (floats just right of the left rail so it never collides with the BANDS/FFT/KBPS chips) — */
-  .scene-label{position:absolute;z-index:3;left:176px;bottom:96px;color:var(--cyan);font-size:11px;letter-spacing:0.24em;text-transform:uppercase;opacity:0;transition:opacity .8s;text-shadow:0 0 18px var(--cyan);pointer-events:none}
-  .scene-label.on{opacity:0.85}
+  .gfx.scene-label{position:absolute;z-index:3;left:176px;bottom:96px;color:var(--cyan);font-size:11px;letter-spacing:0.24em;text-transform:uppercase;opacity:0;transition:opacity .8s;text-shadow:0 0 18px var(--cyan);pointer-events:none}
+  .gfx.scene-label.on{opacity:0.85}
 
   /* — LYRIC LINE (center bottom, floating) — */
   .lyric{position:absolute;z-index:3;left:50%;bottom:120px;transform:translateX(-50%);color:var(--ink);font-size:22px;letter-spacing:0.06em;opacity:0;transition:opacity .6s;text-shadow:0 0 22px rgba(34,211,238,.8);text-align:center;pointer-events:none}
@@ -121,7 +121,7 @@
     .rail .pill.hero{font-size:12px;height:44px}
     .ftr{grid-template-columns:96px 1fr auto;padding:4px}
     .pill{font-size:11px;padding:0 12px}
-    .scene-label{left:108px;bottom:80px;font-size:10px}
+    .gfx.scene-label{left:108px;bottom:80px;font-size:10px}
     .lyric{font-size:16px;bottom:96px}
     .status{font-size:9px}
     .vol{padding:4px 8px}
@@ -129,7 +129,7 @@
   }
   @media (max-width:520px){
     body{grid-template-columns:72px 1fr}
-    .scene-label{left:82px}
+    .gfx.scene-label{left:82px}
     .hdr .pill{padding:0 10px}
   }
 </style>
@@ -161,7 +161,7 @@
   <!-- Stage: canvas + overlays -->
   <div id="stage">
     <canvas id="gl"></canvas>
-    <div class="scene-label" id="sceneLabel">INTRO · GANYMEDE SEED</div>
+    <div class="gfx.scene-label" id="sceneLabel">INTRO · GANYMEDE SEED</div>
     <div class="lyric" id="lyric"></div>
     <div class="status" id="status">
       SUB  <span class="val" id="st-sub">--.-</span><br>
@@ -380,14 +380,15 @@
     // 3 · THREE.JS SCENE — fullscreen plane with fragment shader
     // ═══════════════════════════════════════════════════════════
     const canvas = document.getElementById('gl');
-    const renderer = new THREE.WebGLRenderer({ canvas, antialias:false, powerPreference:'high-performance' });
-    renderer.setPixelRatio(Math.min(2, devicePixelRatio));
-    renderer.setSize(innerWidth, innerHeight, false);
+    const gfx = {};  // graphics handles — absorbed as this.* in Stage C
+    gfx.renderer = new THREE.WebGLRenderer({ canvas, antialias:false, powerPreference:'high-performance' });
+    gfx.renderer.setPixelRatio(Math.min(2, devicePixelRatio));
+    gfx.renderer.setSize(innerWidth, innerHeight, false);
 
-    const scene = new THREE.Scene();
-    const camera = new THREE.OrthographicCamera(-1,1,1,-1,0,1);
+    gfx.scene = new THREE.Scene();
+    gfx.camera = new THREE.OrthographicCamera(-1,1,1,-1,0,1);
 
-    const uniforms = {
+    gfx.uniforms = {
       iTime:        { value: 0 },
       iResolution:  { value: new THREE.Vector2(innerWidth, innerHeight) },
       iSub:         { value: 0 },
@@ -426,9 +427,9 @@
       tex.needsUpdate = true;
       return tex;
     }
-    uniforms.iText.value = buildBannerTexture('EARLY AI-DOPTERS');
+    gfx.uniforms.iText.value = buildBannerTexture('EARLY AI-DOPTERS');
 
-    // Shader: starfield vacuum + central pulse (scene 1 placeholder)
+    // Shader: starfield vacuum + central pulse (gfx.scene 1 placeholder)
     // Vertex emits vUv (0..1 across the fullscreen plane) — DPR-invariant,
     // which is how we avoid the gl_FragCoord/iResolution DPR trap.
     const vert = /* glsl */`
@@ -790,18 +791,18 @@
       }
     `;
 
-    const mat = new THREE.ShaderMaterial({ uniforms, vertexShader:vert, fragmentShader:frag });
+    const mat = new THREE.ShaderMaterial({ uniforms: gfx.uniforms, vertexShader:vert, fragmentShader:frag });
     const quad = new THREE.Mesh(new THREE.PlaneGeometry(2,2), mat);
-    scene.add(quad);
+    gfx.scene.add(quad);
 
     // Post chain
-    const composer = new EffectComposer(renderer);
-    composer.setPixelRatio(Math.min(2, devicePixelRatio));
-    composer.setSize(innerWidth, innerHeight);
-    composer.addPass(new RenderPass(scene, camera));
+    gfx.composer = new EffectComposer(gfx.renderer);
+    gfx.composer.setPixelRatio(Math.min(2, devicePixelRatio));
+    gfx.composer.setSize(innerWidth, innerHeight);
+    gfx.composer.addPass(new RenderPass(gfx.scene, gfx.camera));
 
     const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.50, 0.42, 0.35);
-    composer.addPass(bloom);
+    gfx.composer.addPass(bloom);
 
     // Chromatic aberration + grain pass
     const caShader = {
@@ -838,9 +839,9 @@
         }
       `
     };
-    const caPass = new ShaderPass(caShader);
-    composer.addPass(caPass);
-    composer.addPass(new OutputPass());
+    gfx.caPass = new ShaderPass(caShader);
+    gfx.composer.addPass(gfx.caPass);
+    gfx.composer.addPass(new OutputPass());
 
     // ═══════════════════════════════════════════════════════════
     // 4 · SYNC TIMELINE — section cues (editable by ear later)
@@ -1097,18 +1098,18 @@
       sections.push({ t: 0.0, label: 'CUSTOM TRACK · LIVE FFT' });
     });
     ui.addEventListener('banner', (e) => {
-      if (uniforms.iText.value) uniforms.iText.value.dispose();
-      uniforms.iText.value = buildBannerTexture(e.detail.text);
+      if (gfx.uniforms.iText.value) gfx.uniforms.iText.value.dispose();
+      gfx.uniforms.iText.value = buildBannerTexture(e.detail.text);
     });
 
     addEventListener('resize', () => {
-      renderer.setSize(innerWidth, innerHeight, false);
-      composer.setSize(innerWidth, innerHeight);
-      uniforms.iResolution.value.set(innerWidth, innerHeight);
+      gfx.renderer.setSize(innerWidth, innerHeight, false);
+      gfx.composer.setSize(innerWidth, innerHeight);
+      gfx.uniforms.iResolution.value.set(innerWidth, innerHeight);
     });
 
     // ═══════════════════════════════════════════════════════════
-    // 6 · RENDER LOOP — reactive envelope → shader uniforms
+    // 6 · RENDER LOOP — reactive envelope → shader gfx.uniforms
     // ═══════════════════════════════════════════════════════════
     let last = performance.now();
     let fps = 60, fpsAccum = 0, fpsFrames = 0;
@@ -1150,7 +1151,7 @@
       // ─── CAMERA DRIFT (mid-onset spring impulses) ─────────
       visState.detector.midBaseline += (visState.env.mid - visState.detector.midBaseline) * Math.min(1, 1.0*dt);
       const midOnsetRaw = visState.env.mid - visState.detector.midBaseline - 0.08;
-      const nowT = uniforms.iTime.value;
+      const nowT = gfx.uniforms.iTime.value;
       if (midOnsetRaw > 0.18 && nowT - visState.lastDriftKick > 0.8) {
         visState.lastDriftKick = nowT;
         const ang = Math.random() * Math.PI * 2;
@@ -1167,16 +1168,16 @@
       // ambient slow breathing — always a tiny bit of drift even on silent verses
       const ambX = Math.sin(nowT * 0.13) * 0.014;
       const ambY = Math.cos(nowT * 0.19) * 0.014;
-      uniforms.iDrift.value.set(visState.drift.x + ambX, visState.drift.y + ambY);
+      gfx.uniforms.iDrift.value.set(visState.drift.x + ambX, visState.drift.y + ambY);
 
-      uniforms.iTime.value += dt;
-      caPass.uniforms.iTime.value = uniforms.iTime.value;
-      uniforms.iSub.value  = visState.env.sub;
-      uniforms.iBass.value = visState.env.bass;
-      uniforms.iMid.value  = visState.env.mid;
-      uniforms.iAir.value  = visState.env.air;
-      uniforms.iKick.value = visState.laserEnv;
-      uniforms.iProgress.value = dur ? t/dur : 0;
+      gfx.uniforms.iTime.value += dt;
+      gfx.caPass.gfx.uniforms.iTime.value = gfx.uniforms.iTime.value;
+      gfx.uniforms.iSub.value  = visState.env.sub;
+      gfx.uniforms.iBass.value = visState.env.bass;
+      gfx.uniforms.iMid.value  = visState.env.mid;
+      gfx.uniforms.iAir.value  = visState.env.air;
+      gfx.uniforms.iKick.value = visState.laserEnv;
+      gfx.uniforms.iProgress.value = dur ? t/dur : 0;
 
       // Section label update
       const cur = currentSection(t);
@@ -1194,12 +1195,12 @@
       // UI readouts (batched — UI owns the DOM writes)
       ui.setReadouts({
         t,
-        progress: uniforms.iProgress.value,
+        progress: gfx.uniforms.iProgress.value,
         sub: visState.env.sub, bass: visState.env.bass, mid: visState.env.mid, air: visState.env.air,
         fps: fpsNow,
       });
 
-      composer.render();
+      gfx.composer.render();
       requestAnimationFrame(tick);
     }
     requestAnimationFrame(tick);
