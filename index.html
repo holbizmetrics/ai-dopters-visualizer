@@ -796,12 +796,15 @@
 
     // file:// trap — Chrome treats every file:// file as its own origin, so routing
     // the bundled mp3 through createMediaElementSource mutes the graph (cross-origin
-    // taint). Result: ENGAGE on the bundled track gives silent playback + zero FFT.
-    // Dropped files are fine (blob: is same-origin to the page). Warn proactively
-    // so this isn't a silent dead-end — drop an mp3 or serve over HTTP.
+    // taint). Worse: the taint sticks once the graph is wired, so engaging on the
+    // bundled track poisons any later drop too. Fix: on file://, disable ENGAGE
+    // until a file is dropped — the dropped blob URL is same-origin, graph wires
+    // clean, full audio + reactivity. HTTP serving is unaffected.
     if (location.protocol === 'file:') {
-      bootSub.textContent = 'FILE:// — BUNDLED TRACK WILL BE SILENT · DROP ANY MP3 OR SERVE VIA HTTP';
+      bootSub.textContent = 'FILE:// — DROP ANY MP3 TO ENGAGE · OR SERVE VIA HTTP FOR BUNDLED TRACK';
       bootSub.style.color = 'var(--lcars-e)';
+      engageBtn.disabled = true;
+      engageBtn.textContent = '▶ ENGAGE · DROP A SONG FIRST';
     }
 
     function fmt(s){ s = Math.max(0,s|0); return Math.floor(s/60)+':'+String(s%60).padStart(2,'0'); }
@@ -866,9 +869,8 @@
       audio.src = currentObjectURL;
       audio.load();
 
-      // Custom track → drop Moons-of-Saturn-specific pre-computed layer
-      // and the hardcoded section timeline. Live FFT carries the visual.
-      bands = null;
+      // Custom track → drop the hardcoded section timeline. Live FFT carries
+      // the visual (pre-computed bands path was removed earlier in sprint 1).
       sections.length = 0;
       sections.push({ t: 0.0, label: 'CUSTOM TRACK · LIVE FFT' });
 
