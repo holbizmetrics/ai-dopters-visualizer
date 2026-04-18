@@ -619,6 +619,7 @@
       uniform float iSub, iBass, iMid, iAir, iKick, iProgress;
       uniform vec2  iDrift;
       uniform sampler2D iText;
+      uniform vec3  iPaletteNear, iPaletteFar, iPaletteAccent;
 
       const float PI = 3.14159265;
 
@@ -726,7 +727,12 @@
         // ═══════════════════════════════════════════════════════
         float depth = 1.0/max(r, 0.001);
         float tunnelScroll = iTime*0.55 + iBass*1.8 + iSub*1.2;
-        vec2 tunnelUV = vec2(a/PI * 0.5 + 0.5, depth*0.25 - tunnelScroll*0.1);
+        // Bass-driven wall flex: ring positions wobble in depth by a slow
+        // angular sinusoid, so the tube walls appear to breathe/corrugate
+        // on each bass hit. Intentionally small (~4% at full bass) — reads
+        // as life, not distortion.
+        float flex = sin(a * 4.0 - iTime * 2.0) * iBass * 0.04;
+        vec2 tunnelUV = vec2(a/PI * 0.5 + 0.5, depth*0.25 - tunnelScroll*0.1 + flex);
 
         // grid lines in tunnel space — thin wireframe
         vec2 gg = fract(tunnelUV * vec2(16.0, 10.0));
@@ -736,12 +742,10 @@
 
         // fade tunnel near the seed (stay clean) and far out (vignette)
         float tunnelFade = smoothstep(0.06, 0.45, r) * smoothstep(1.2, 0.35, r);
-        // WARM tube, COOL seed — complementary split.
-        // Near rings: LCARS amber. Deep rings: magenta. Bass kicks: hot pink.
-        vec3 tubeNear = vec3(1.00, 0.55, 0.10);   // amber
-        vec3 tubeFar  = vec3(0.90, 0.20, 0.55);   // magenta
-        vec3 tubeCol  = mix(tubeNear, tubeFar, clamp(depth*0.14, 0.0, 1.0));
-        tubeCol       = mix(tubeCol, vec3(1.0, 0.35, 0.70), iBass*0.55);   // kick flash
+        // Per-section palette — near/far tube colors and kick-flash accent
+        // are driven by uniforms the JS side crossfades at boundaries.
+        vec3 tubeCol  = mix(iPaletteNear, iPaletteFar, clamp(depth*0.14, 0.0, 1.0));
+        tubeCol       = mix(tubeCol, iPaletteAccent, iBass*0.55);   // kick flash
         col += tubeCol * grid * tunnelFade * (0.55 + iMid*0.8);
 
         // ═══════════════════════════════════════════════════════
@@ -951,6 +955,19 @@
         col += vec3(1.0, 0.35, 0.75) * laser * iKick * 1.2 * laserFade;
 
         // ═══════════════════════════════════════════════════════
+        // LENS FLARE — anamorphic horizontal streak + chromatic halos,
+        // punched on kicks. Anchored in uv0 (pre-drift, pre-rotate) so
+        // it reads as a lens artifact on the camera, not part of the
+        // tunnel. kickPow = iKick² gives a snappier attack than linear.
+        // ═══════════════════════════════════════════════════════
+        float kickPow = iKick * iKick;
+        float flareBar = exp(-uv0.y*uv0.y * 900.0) * exp(-abs(uv0.x) * 1.2);
+        float flareHaloL = exp(-length(uv0 - vec2( 0.18, 0.0)) * 26.0);
+        float flareHaloR = exp(-length(uv0 - vec2(-0.18, 0.0)) * 26.0);
+        float flareIntensity = (flareBar + (flareHaloL + flareHaloR) * 0.65) * kickPow;
+        col += iPaletteAccent * flareIntensity * 1.6;
+
+        // ═══════════════════════════════════════════════════════
         // CRT SCANLINES — mid-driven, subtle. Pushes the "broadcast"
         // register so the whole thing reads as captured-on-CRT, not
         // generated-on-4K-monitor.
@@ -1005,13 +1022,22 @@
     // ═══════════════════════════════════════════════════════════
     // 4 · SYNC TIMELINE — section cues (editable by ear later)
     // ═══════════════════════════════════════════════════════════
+    // Per-section tunnel palettes — near ring, far ring, kick-flash accent.
+    // Visualizer lerps live uniforms toward the current section's palette
+    // each frame; boundary crossings read as smooth color crossfades.
     const sections = [
-      { t: 0.0,   label: 'INTRO · GANYMEDE SEED' },
-      { t: 3.0,   label: 'VERSE · BEINGS OF LIGHT' },
-      { t: 90.0,  label: 'MOVEMENT · DEEP MOOG' },
-      { t: 150.0, label: 'BUILD · RISING CUTOFF' },
-      { t: 175.0, label: 'DROP · FESTIVAL ARPEGGIO' },
-      { t: 190.0, label: 'OUTRO · ULTRAVIOLET SILENCE' }
+      { t: 0.0,   label: 'INTRO · GANYMEDE SEED',
+        palette: { near: [0.15, 0.70, 1.00], far: [0.08, 0.28, 0.85], accent: [0.35, 0.95, 1.00] } },   // cool cyan/indigo
+      { t: 3.0,   label: 'VERSE · BEINGS OF LIGHT',
+        palette: { near: [1.00, 0.55, 0.10], far: [0.90, 0.20, 0.55], accent: [1.00, 0.35, 0.70] } },   // amber / magenta (legacy)
+      { t: 90.0,  label: 'MOVEMENT · DEEP MOOG',
+        palette: { near: [0.75, 0.30, 0.95], far: [0.25, 0.10, 0.55], accent: [0.85, 0.45, 1.00] } },   // deep violet
+      { t: 150.0, label: 'BUILD · RISING CUTOFF',
+        palette: { near: [1.00, 0.82, 0.20], far: [0.95, 0.35, 0.10], accent: [1.00, 0.55, 0.15] } },   // yellow → red-orange
+      { t: 175.0, label: 'DROP · FESTIVAL ARPEGGIO',
+        palette: { near: [0.55, 1.00, 0.40], far: [0.10, 0.70, 0.75], accent: [0.30, 1.00, 0.85] } },   // lime → teal
+      { t: 190.0, label: 'OUTRO · ULTRAVIOLET SILENCE',
+        palette: { near: [0.65, 0.30, 1.00], far: [0.15, 0.05, 0.35], accent: [0.90, 0.75, 1.00] } }    // ultraviolet
     ];
     function currentSection(t){
       let s = sections[0];
@@ -1405,6 +1431,9 @@
         this._fpsAccum = 0;
         this._fpsFrames = 0;
         this._lastSectionT = -1;
+        // Scratch color used by the per-frame palette lerp — reused each
+        // frame so we don't allocate three Color objects per tick.
+        this._palTmp = new THREE.Color();
 
         // Renderer + scene
         this.renderer = new THREE.WebGLRenderer({ canvas, antialias:false, powerPreference:'high-performance' });
@@ -1425,7 +1454,12 @@
           iKick:       { value: 0 },   // transient onset (drum hit detector)
           iDrift:      { value: new THREE.Vector2(0, 0) },  // camera bank offset
           iText:       { value: null }, // CanvasTexture with banner text
-          iProgress:   { value: 0 }    // 0..1 through track
+          iProgress:   { value: 0 },   // 0..1 through track
+          // Per-section tunnel palette — live values lerp toward the
+          // current section's target each frame. Initialised to section[0].
+          iPaletteNear:   { value: new THREE.Color().fromArray(this.sections[0].palette.near) },
+          iPaletteFar:    { value: new THREE.Color().fromArray(this.sections[0].palette.far) },
+          iPaletteAccent: { value: new THREE.Color().fromArray(this.sections[0].palette.accent) },
         };
         this.uniforms.iText.value = buildBannerTexture('EARLY AI-DOPTERS');
 
@@ -1524,8 +1558,19 @@
         uniforms.iKick.value = state.laserEnv;
         uniforms.iProgress.value = dur ? t/dur : 0;
 
-        // Section label update
+        // ─── SECTION PALETTE CROSSFADE ───────────────────────────
+        // Each frame, ease the live palette uniforms toward the target
+        // section palette. Rate is dt-scaled so speed is frame-independent;
+        // ~0.8 means the crossfade settles in ~1.2s — slow enough to feel
+        // cinematic, fast enough to land before the next section.
         const cur = this.currentSection(t);
+        const pal = cur.palette;
+        const palRate = Math.min(1, 0.8 * dt);
+        uniforms.iPaletteNear.value.lerp(  this._palTmp.fromArray(pal.near),   palRate);
+        uniforms.iPaletteFar.value.lerp(   this._palTmp.fromArray(pal.far),    palRate);
+        uniforms.iPaletteAccent.value.lerp(this._palTmp.fromArray(pal.accent), palRate);
+
+        // Section label update
         if (cur.t !== this._lastSectionT) {
           this._lastSectionT = cur.t;
           const idx = this.sections.indexOf(cur) + 1;
