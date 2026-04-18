@@ -200,6 +200,7 @@
     <div class="pill b btn" id="btnPlayPause">PAUSE</div>
     <div class="pill d btn" id="btnRestart">RESTART</div>
     <div class="pill c btn" id="btnMute">MUTE</div>
+    <div class="pill btn" id="btnFullscreen">FULLSCREEN</div>
     <div class="vol">
       <div class="vol-label"><span>VOL</span><span class="val" id="volVal">80</span></div>
       <input type="range" id="volSlider" min="0" max="100" step="1" value="80" aria-label="Volume">
@@ -1034,6 +1035,7 @@
         this.btnPlayPause = document.getElementById('btnPlayPause');
         this.btnRestart   = document.getElementById('btnRestart');
         this.btnMute      = document.getElementById('btnMute');
+        this.btnFullscreen = document.getElementById('btnFullscreen');
         this.sessDate     = document.getElementById('sessDate');
         this.sceneLabel   = document.getElementById('sceneLabel');
         this.sceneTag     = document.getElementById('sceneTag');
@@ -1307,6 +1309,20 @@
           const muted = this.audio.toggleMute();
           this.btnMute.textContent = muted ? 'UNMUTE' : 'MUTE';
           this.btnMute.classList.toggle('active', muted);
+        });
+        // Fullscreen toggle — requests on the whole document so LCARS chrome goes
+        // fullscreen too (not just the canvas). fullscreenchange keeps the label
+        // in sync with any exit path (Escape, browser UI, programmatic).
+        this.btnFullscreen.addEventListener('click', async () => {
+          try {
+            if (document.fullscreenElement) await document.exitFullscreen();
+            else await document.documentElement.requestFullscreen();
+          } catch (e) { console.warn('fullscreen toggle failed:', e); }
+        });
+        document.addEventListener('fullscreenchange', () => {
+          const on = !!document.fullscreenElement;
+          this.btnFullscreen.textContent = on ? 'EXIT FS' : 'FULLSCREEN';
+          this.btnFullscreen.classList.toggle('active', on);
         });
       }
 
