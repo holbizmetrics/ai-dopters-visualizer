@@ -909,9 +909,20 @@
     // Prevent the text-edit click from bubbling into the drop zone
     bannerInput.addEventListener('click', (e) => e.stopPropagation());
 
-    // Boot-zone visual feedback during drag
+    // Boot-zone visual feedback + explicit drop handler. The dropZone is a <label>
+    // wrapping a hidden <input type=file>; Chrome routes drops on the label into
+    // the input, but display:none keeps the input from firing change. So we
+    // handle drop directly on the zone and stop the event so window-level drop
+    // (which is set up further down) doesn't also ingest the same file twice.
     ['dragenter','dragover'].forEach(evt => dropZone.addEventListener(evt, (e)=>{ e.preventDefault(); dropZone.classList.add('hot'); }));
-    ['dragleave','drop'].forEach(evt => dropZone.addEventListener(evt, ()=> dropZone.classList.remove('hot')));
+    dropZone.addEventListener('dragleave', () => dropZone.classList.remove('hot'));
+    dropZone.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      dropZone.classList.remove('hot');
+      const file = e.dataTransfer?.files?.[0];
+      if (file) await ingestAudioFile(file);
+    });
 
     // Global window-level drag&drop (works pre- AND post-engage)
     let dragDepth = 0;
