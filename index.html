@@ -64,8 +64,8 @@
   .track .t{font-variant-numeric:tabular-nums;font-weight:700;font-size:12px;min-width:9ch;text-align:right}
 
   /* — SCENE LABEL (floats just right of the left rail so it never collides with the BANDS/FFT/KBPS chips) — */
-  .gfx.scene-label{position:absolute;z-index:3;left:176px;bottom:96px;color:var(--cyan);font-size:11px;letter-spacing:0.24em;text-transform:uppercase;opacity:0;transition:opacity .8s;text-shadow:0 0 18px var(--cyan);pointer-events:none}
-  .gfx.scene-label.on{opacity:0.85}
+  .scene-label{position:absolute;z-index:3;left:176px;bottom:96px;color:var(--cyan);font-size:11px;letter-spacing:0.24em;text-transform:uppercase;opacity:0;transition:opacity .8s;text-shadow:0 0 18px var(--cyan);pointer-events:none}
+  .scene-label.on{opacity:0.85}
 
   /* — LYRIC LINE (center bottom, floating) — */
   .lyric{position:absolute;z-index:3;left:50%;bottom:120px;transform:translateX(-50%);color:var(--ink);font-size:22px;letter-spacing:0.06em;opacity:0;transition:opacity .6s;text-shadow:0 0 22px rgba(34,211,238,.8);text-align:center;pointer-events:none}
@@ -121,7 +121,7 @@
     .rail .pill.hero{font-size:12px;height:44px}
     .ftr{grid-template-columns:96px 1fr auto;padding:4px}
     .pill{font-size:11px;padding:0 12px}
-    .gfx.scene-label{left:108px;bottom:80px;font-size:10px}
+    .scene-label{left:108px;bottom:80px;font-size:10px}
     .lyric{font-size:16px;bottom:96px}
     .status{font-size:9px}
     .vol{padding:4px 8px}
@@ -129,7 +129,7 @@
   }
   @media (max-width:520px){
     body{grid-template-columns:72px 1fr}
-    .gfx.scene-label{left:82px}
+    .scene-label{left:82px}
     .hdr .pill{padding:0 10px}
   }
 </style>
@@ -1171,7 +1171,7 @@
       gfx.uniforms.iDrift.value.set(visState.drift.x + ambX, visState.drift.y + ambY);
 
       gfx.uniforms.iTime.value += dt;
-      gfx.caPass.gfx.uniforms.iTime.value = gfx.uniforms.iTime.value;
+      gfx.caPass.uniforms.iTime.value = gfx.uniforms.iTime.value;
       gfx.uniforms.iSub.value  = visState.env.sub;
       gfx.uniforms.iBass.value = visState.env.bass;
       gfx.uniforms.iMid.value  = visState.env.mid;
