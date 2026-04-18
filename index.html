@@ -260,56 +260,186 @@
     // file:// trap: `createMediaElementSource` taints the graph when the
     // source is cross-origin, and Chrome treats every file:// file as its
     // own origin. The taint is *sticky* — once wired to a tainted source,
-    // later src swaps also play silent. `isGraphSafe` tells the UI whether
-    // engaging now is safe; the UI gates the ENGAGE button on file:// until
-    // the user drops a file (blob URLs are same-origin = safe).
+    // later src swaps also play silent.
+    //
+    // M.2 fix: two strategies behind one public API.
+    //   element strategy — MediaElementSource → Gain → Analyser → Destination.
+    //     Used for HTTP bundled and for dropped blob URLs (same-origin, no taint).
+    //   buffer strategy  — AudioBufferSource → Gain → Analyser → Destination.
+    //     Used on file:// bundled. Bytes come from fetch() + decodeAudioData,
+    //     so there's no MediaElementSource in the graph and no taint to catch.
+    //     Note: Chrome/Brave block fetch() on file:// by default; launch with
+    //     --allow-file-access-from-files, or use Firefox/Safari. If fetch fails
+    //     the pill click surfaces "ENGAGE FAILED — DROP AN MP3 INSTEAD".
+    //
+    // Mode switches are supported: dropping a file after buffer playback tears
+    // down the buffer node and re-wires the element source.
     class AudioSource extends EventTarget {
       constructor(audioElement) {
         super();
         this.el = audioElement;
         this.ac = null;
-        this.srcNode = null;
+        this.elNode = null;     // MediaElementSource (lazy, one-shot per <audio>)
         this.analyser = null;
+        this.gain = null;       // Single GainNode upstream of analyser; shared by both modes.
         this.fftSize = 2048;
         this.freqBins = this.fftSize / 2;
         this.freqData = new Uint8Array(this.freqBins);
         this.objectURL = null;
+
+        // Mode + buffer-strategy state. When _mode==='element' the <audio>
+        // element is the source of truth for time/paused/ended/muted/volume.
+        // When _mode==='buffer' those come from the fields below.
+        this._mode = 'element';
+        this._engaged = false;
+        this._buf = null;              // decoded AudioBuffer
+        this._bufSrc = null;           // last-decoded src string, for cache dedup
+        this._bufNode = null;          // AudioBufferSourceNode (recreated per play/restart)
+        this._bufStartCtxTime = 0;     // ac.currentTime at the moment _bufNode.start() fired
+        this._bufOffset = 0;           // seconds into buffer at that start (resume point)
+        this._bufPaused = true;
+        this._bufEnded = false;
+        this._bufMuted = false;
+        this._bufVolume = 1.0;
+
         for (const evt of ['play','pause','ended','error','volumechange','loadedmetadata']) {
           this.el.addEventListener(evt, () => this.dispatchEvent(new Event(evt)));
         }
       }
 
-      get isGraphSafe() {
-        const src = this.el.currentSrc || this.el.src;
-        if (!src) return false;
-        if (src.startsWith('blob:')) return true;
-        if (location.protocol === 'file:') return false;
-        return true;
-      }
-
-      get isEngaged()  { return !!this.ac; }
-      get currentTime(){ return this.el.currentTime; }
-      get duration()   { return this.el.duration; }
-      get ended()      { return this.el.ended; }
-      get paused()     { return this.el.paused; }
-      get muted()      { return this.el.muted; }
+      get isEngaged()  { return this._engaged; }
       get sampleRate() { return this.ac ? this.ac.sampleRate : 44100; }
 
-      _ensureGraph() {
+      get currentTime() {
+        if (this._mode === 'buffer') {
+          if (!this._buf) return 0;
+          if (this._bufPaused || this._bufEnded) return this._bufOffset;
+          return Math.min(this._bufOffset + (this.ac.currentTime - this._bufStartCtxTime), this._buf.duration);
+        }
+        return this.el.currentTime;
+      }
+      get duration() {
+        if (this._mode === 'buffer') return this._buf ? this._buf.duration : NaN;
+        return this.el.duration;
+      }
+      get ended()  { return this._mode === 'buffer' ? this._bufEnded  : this.el.ended; }
+      get paused() { return this._mode === 'buffer' ? this._bufPaused : this.el.paused; }
+      get muted()  { return this._mode === 'buffer' ? this._bufMuted  : this.el.muted; }
+
+      // Lazily build AudioContext + analyser + gain + output wiring.
+      // Safe to call without a user gesture — AudioContext creation is
+      // allowed; resume() is what needs the gesture and that's in engage().
+      _ensureAc() {
         if (this.ac) return;
         const Ctx = window.AudioContext || window.webkitAudioContext;
         this.ac = new Ctx();
-        this.srcNode = this.ac.createMediaElementSource(this.el);
         this.analyser = this.ac.createAnalyser();
         this.analyser.fftSize = this.fftSize;
         this.analyser.smoothingTimeConstant = 0.2;
-        this.srcNode.connect(this.analyser);
+        this.gain = this.ac.createGain();
+        this.gain.gain.value = 1.0;
+        this.gain.connect(this.analyser);
         this.analyser.connect(this.ac.destination);
       }
 
+      _connectElementGraph() {
+        this._ensureAc();
+        if (!this.elNode) {
+          // createMediaElementSource is one-shot per element; build and cache.
+          this.elNode = this.ac.createMediaElementSource(this.el);
+        }
+        this._teardownBufferNode();
+        try { this.elNode.disconnect(); } catch (e) {}
+        this.elNode.connect(this.gain);
+        this._mode = 'element';
+      }
+
+      _teardownBufferNode() {
+        if (!this._bufNode) return;
+        // Null onended first so the natural-end handler doesn't fire on our
+        // programmatic stop (pause/restart/mode-switch).
+        try { this._bufNode.onended = null; this._bufNode.stop(); } catch (e) {}
+        try { this._bufNode.disconnect(); } catch (e) {}
+        this._bufNode = null;
+      }
+
+      // Public: swap to a bundled track. Async because buffer mode decodes up
+      // front. Element mode just sets el.src so preload can kick in.
+      async loadBundled(src) {
+        if (location.protocol === 'file:') {
+          await this._loadBufferSource(src);
+          return;
+        }
+        if (this.el.src && this.el.src.endsWith(src)) return;
+        this.el.src = src;
+        this._mode = 'element';
+      }
+
+      // Back-compat: older sites called setBundledSource sync. Keep it as a
+      // fire-and-forget wrapper; engage() awaits load progress separately.
+      setBundledSource(src) {
+        this.loadBundled(src).catch((e) => console.warn('loadBundled failed:', e));
+      }
+
+      async _loadBufferSource(src) {
+        if (this._bufSrc === src && this._buf) {
+          this._mode = 'buffer';
+          this.dispatchEvent(new Event('bundledavailable'));
+          return;
+        }
+        this._ensureAc();
+        const resp = await fetch(src);
+        if (!resp.ok) throw new Error('fetch failed: ' + resp.status);
+        const bytes = await resp.arrayBuffer();
+        this._buf = await this.ac.decodeAudioData(bytes);
+        this._bufSrc = src;
+        this._bufOffset = 0;
+        this._bufPaused = true;
+        this._bufEnded = false;
+        this._mode = 'buffer';
+        // Synthesize loadedmetadata so UI picks up the new duration.
+        this.dispatchEvent(new Event('loadedmetadata'));
+        // Signal UI to un-gate bundled pills — proves fetch+decode works here
+        // (matters on file:// where Chrome blocks fetch by default).
+        this.dispatchEvent(new Event('bundledavailable'));
+      }
+
+      _startBufferFromOffset(offset) {
+        this._teardownBufferNode();
+        if (!this._buf) return;
+        offset = Math.max(0, Math.min(offset, this._buf.duration));
+        const node = this.ac.createBufferSource();
+        node.buffer = this._buf;
+        node.connect(this.gain);
+        node.onended = () => {
+          // Natural end only — _teardownBufferNode nulls onended before stopping.
+          if (this._bufNode !== node) return;
+          this._bufEnded = true;
+          this._bufPaused = true;
+          this._bufOffset = this._buf.duration;
+          this.dispatchEvent(new Event('ended'));
+        };
+        node.start(0, offset);
+        this._bufNode = node;
+        this._bufStartCtxTime = this.ac.currentTime;
+        this._bufOffset = offset;
+        this._bufPaused = false;
+        this._bufEnded = false;
+      }
+
       async engage() {
-        this._ensureGraph();
+        this._ensureAc();
         if (this.ac.state === 'suspended') await this.ac.resume();
+        if (this._mode === 'buffer') {
+          if (!this._buf) throw new Error('no buffer loaded');
+          this._startBufferFromOffset(0);
+          this._engaged = true;
+          this.dispatchEvent(new CustomEvent('engaged'));
+          this.dispatchEvent(new Event('play'));
+          return;
+        }
+        // element mode
+        this._connectElementGraph();
         if (this.el.readyState < 2) {
           try { this.el.load(); } catch (e) {}
           await new Promise((resolve) => {
@@ -321,15 +451,8 @@
           });
         }
         await this.el.play();
+        this._engaged = true;
         this.dispatchEvent(new CustomEvent('engaged'));
-      }
-
-      // Point the <audio> element at a same-origin bundled track. engage()
-      // handles the load wait via its readyState check, so this is a pure
-      // src swap. Safe to call before or after engage.
-      setBundledSource(src) {
-        if (this.el.src && this.el.src.endsWith(src)) return;  // no-op on same src
-        this.el.src = src;
       }
 
       async ingestFile(file) {
@@ -337,28 +460,80 @@
         if (!file.type.startsWith('audio/') && !/\.(mp3|wav|ogg|m4a|flac|aac)$/i.test(file.name)) return null;
         if (this.objectURL) URL.revokeObjectURL(this.objectURL);
         this.objectURL = URL.createObjectURL(file);
+        // Drops always go element-path — blob: is same-origin, no taint. If we
+        // were mid-buffer-playback, tear that down so the element graph is the
+        // only thing feeding the analyser.
+        this._teardownBufferNode();
+        this._bufPaused = true;
+        this._bufEnded = false;
         this.el.pause();
         this.el.src = this.objectURL;
         this.el.load();
+        this._mode = 'element';
         const name = file.name.replace(/\.[^.]+$/, '').toUpperCase().slice(0, 48);
         const meta = { name, objectURL: this.objectURL, file };
         this.dispatchEvent(new CustomEvent('ingested', { detail: meta }));
         return meta;
       }
 
-      async play()    { if (!this.el.ended) await this.el.play(); }
-      pause()         { this.el.pause(); }
+      async play() {
+        if (this._mode === 'buffer') {
+          if (this._bufEnded || !this._bufPaused) return;
+          if (this.ac.state === 'suspended') await this.ac.resume();
+          this._startBufferFromOffset(this._bufOffset);
+          this.dispatchEvent(new Event('play'));
+          return;
+        }
+        if (!this.el.ended) await this.el.play();
+      }
+
+      pause() {
+        if (this._mode === 'buffer') {
+          if (this._bufPaused || this._bufEnded) return;
+          // Capture elapsed into offset BEFORE stopping the node, so resume
+          // starts from the right place.
+          const elapsed = this.ac.currentTime - this._bufStartCtxTime;
+          this._bufOffset = Math.min(this._bufOffset + elapsed, this._buf.duration);
+          this._teardownBufferNode();
+          this._bufPaused = true;
+          this.dispatchEvent(new Event('pause'));
+          return;
+        }
+        this.el.pause();
+      }
+
       async restart() {
+        if (this._mode === 'buffer') {
+          if (this.ac.state === 'suspended') await this.ac.resume();
+          this._startBufferFromOffset(0);
+          this.dispatchEvent(new Event('play'));
+          return;
+        }
         try { this.el.currentTime = 0; } catch (e) {}
         if (this.ac && this.ac.state === 'suspended') await this.ac.resume();
         if (this.el.paused || this.el.ended) await this.el.play();
       }
+
       toggleMute() {
+        if (this._mode === 'buffer') {
+          this._bufMuted = !this._bufMuted;
+          if (this.gain) this.gain.gain.value = this._bufMuted ? 0 : this._bufVolume;
+          this.dispatchEvent(new Event('volumechange'));
+          return this._bufMuted;
+        }
         this.el.muted = !this.el.muted;
         return this.el.muted;
       }
+
       setVolume(pct) {
         const v = Math.max(0, Math.min(1, pct/100));
+        if (this._mode === 'buffer') {
+          this._bufVolume = v;
+          if (v > 0 && this._bufMuted) this._bufMuted = false;
+          if (this.gain) this.gain.gain.value = this._bufMuted ? 0 : v;
+          this.dispatchEvent(new Event('volumechange'));
+          return;
+        }
         this.el.volume = v;
         if (v > 0 && this.el.muted) this.el.muted = false;
       }
@@ -386,10 +561,10 @@
     ];
 
     const audioSource = new AudioSource(document.getElementById('audio'));
-    // Pre-point the <audio> element at the first bundled track so preload
-    // can start before the user clicks. If they pick a different entry the
-    // click handler swaps src.
-    if (TRACKS.length) audioSource.setBundledSource(TRACKS[0].src);
+    // Note: UI must be constructed BEFORE we kick off the initial bundled
+    // load, because on file:// AudioSource emits 'bundledavailable' (or
+    // silently fails) from the async load — UI needs its listener wired
+    // first to un-gate the pills on success.
 
     // ═══════════════════════════════════════════════════════════
     // 3 · SHADERS — vert/frag strings + caShader post-pass
@@ -876,6 +1051,10 @@
         this.volVal       = document.getElementById('volVal');
         this._bannerDebounce = 0;
         this._dragDepth = 0;
+        // True while bundled pills are in the gated (HTTP-ONLY) state. Flipped
+        // to false once AudioSource confirms bundledavailable. Consulted by
+        // the click-handler catch to decide whether to re-enable siblings.
+        this._pillsGated = false;
 
         this.sessDate.textContent = new Date().toISOString().slice(0,10).replace(/-/g,'.');
         this._renderTrackMenu();
@@ -910,30 +1089,59 @@
 
       // file:// trap — Chrome treats every file:// file as its own origin, so routing
       // the bundled mp3 through createMediaElementSource mutes the graph (cross-origin
-      // taint). Worse: the taint sticks once the graph is wired, so engaging on the
-      // bundled track poisons any later drop too. Fix: on file://, disable all bundled
-      // track pills until a file is dropped — the dropped blob URL is same-origin,
-      // graph wires clean, full audio + reactivity. HTTP serving is unaffected.
+      // taint). M.2 swaps to AudioBufferSource on file:// which dodges the taint,
+      // but it needs fetch() to read the mp3 bytes — Chrome blocks that by default
+      // on file:// unless launched with --allow-file-access-from-files.
+      //
+      // So on file:// we start in the GATED state (disabled pill + HTTP-ONLY tag)
+      // and listen for AudioSource's 'bundledavailable' event, which fires after
+      // a successful fetch+decode. If it arrives → un-gate; if not → user still
+      // sees a clear "HTTP only / drop an MP3" path.
       _applyFileGate() {
         if (location.protocol !== 'file:') return;
-        this.bootSub.textContent = 'FILE:// — DROP ANY MP3 TO ENGAGE · OR SERVE VIA HTTP FOR BUNDLED TRACKS';
+        this._pillsGated = true;
+        this._gatePills('LCARS · AV CORE · PROBING BUNDLED ACCESS…');
+        // Fires if/when the first bundled load actually succeeds.
+        this.audio.addEventListener('bundledavailable', () => this._ungatePills(), { once: true });
+      }
+
+      _gatePills(subText) {
+        this.bootSub.textContent = subText || 'FILE:// — DROP ANY MP3 TO ENGAGE · OR SERVE VIA HTTP FOR BUNDLED TRACKS';
         this.bootSub.style.color = 'var(--lcars-e)';
         for (const btn of this.trackMenu.querySelectorAll('.track-item')) {
           btn.disabled = true;
-          btn.title = 'Bundled playback disabled on file:// — drop any MP3, or serve over HTTP';
-          // Swap ▶ → 🔒 (as a glyph, not an emoji — stays on LCARS palette)
+          btn.title = 'Bundled playback blocked on file:// — drop any MP3, serve over HTTP, or launch the browser with --allow-file-access-from-files';
           const glyph = btn.querySelector('.glyph');
           if (glyph) glyph.textContent = '⬢';
-          // Replace the artist meta with an amber "HTTP ONLY" tag so the
-          // pill reads as gated, not broken.
           const artist = btn.querySelector('.artist');
-          if (artist) {
+          if (artist && !artist.classList.contains('status-tag')) {
             const tag = document.createElement('span');
             tag.className = 'status-tag';
             tag.textContent = 'HTTP ONLY';
             artist.replaceWith(tag);
           }
         }
+        // Also schedule a fallback: if 'bundledavailable' doesn't arrive within
+        // a reasonable window, swap the PROBING… subtitle for the permanent
+        // gate message so the user isn't left watching a spinner.
+        clearTimeout(this._gateFallback);
+        this._gateFallback = setTimeout(() => {
+          if (this.bootSub.textContent.includes('PROBING')) {
+            this.bootSub.textContent = 'FILE:// — DROP ANY MP3 TO ENGAGE · OR SERVE VIA HTTP FOR BUNDLED TRACKS';
+          }
+        }, 2000);
+      }
+
+      _ungatePills() {
+        clearTimeout(this._gateFallback);
+        this._pillsGated = false;
+        // Reset subtitle to the neutral form
+        this.bootSub.textContent = 'LCARS · AUDIO VISUAL CORE · SELECT A TRACK';
+        this.bootSub.style.color = '';
+        // Re-render the track menu from scratch — simpler than reversing
+        // the gate mutations and avoids state drift between gate+ungate.
+        this._renderTrackMenu();
+        this._wireTrackMenu();
       }
 
       _wireAudioEvents() {
@@ -967,6 +1175,10 @@
         for (const btn of this.trackMenu.querySelectorAll('.track-item')) {
           btn.addEventListener('click', async () => {
             if (btn.disabled) return;
+            // Capture the real title BEFORE overwriting the pill's innerHTML —
+            // otherwise we'd copy the "· · · ENGAGING · · ·" placeholder into
+            // the header pill instead of the track name.
+            const realTitle = btn.querySelector('.title').textContent;
             // Visually mark the in-flight selection
             const prevHtml = btn.innerHTML;
             btn.disabled = true;
@@ -977,8 +1189,7 @@
             }
             try {
               // Update lead text so the header matches the selected track
-              const title = btn.querySelector('.title').textContent;
-              if (this.headerLead) this.headerLead.textContent = title;
+              if (this.headerLead) this.headerLead.textContent = realTitle;
               this.audio.setBundledSource(btn.dataset.src);
               await this.audio.engage();
               this.boot.classList.add('hidden');
@@ -989,8 +1200,10 @@
               this.bootSub.style.color = 'var(--lcars-e)';
               btn.innerHTML = prevHtml;
               btn.disabled = false;
+              // Re-enable siblings unless the bundled gate is still active
+              // (file:// without fetch access — pills should stay gated).
               for (const other of this.trackMenu.querySelectorAll('.track-item')) {
-                if (location.protocol !== 'file:') other.disabled = false;
+                if (!this._pillsGated) other.disabled = false;
               }
             }
           });
@@ -1124,6 +1337,13 @@
     }
 
     const ui = new UI(audioSource, TRACKS);
+
+    // Kick off the bundled preload AFTER UI exists so the 'bundledavailable'
+    // listener can catch the signal. On HTTP this just sets el.src (preload
+    // starts). On file:// this attempts fetch+decode — succeeds on Firefox/
+    // Safari and on Chrome launched with --allow-file-access-from-files,
+    // fails silently otherwise (pills stay gated with HTTP-ONLY tag).
+    if (TRACKS.length) audioSource.setBundledSource(TRACKS[0].src);
 
     // ═══════════════════════════════════════════════════════════
     // 6 · VISUALIZER — owns sim state + gfx handles + renderFrame.
