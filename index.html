@@ -161,7 +161,7 @@
   <!-- Stage: canvas + overlays -->
   <div id="stage">
     <canvas id="gl"></canvas>
-    <div class="gfx.scene-label" id="sceneLabel">INTRO · GANYMEDE SEED</div>
+    <div class="scene-label" id="sceneLabel">INTRO · GANYMEDE SEED</div>
     <div class="lyric" id="lyric"></div>
     <div class="status" id="status">
       SUB  <span class="val" id="st-sub">--.-</span><br>
@@ -360,52 +360,15 @@
 
     const audioSource = new AudioSource(document.getElementById('audio'));
 
-    // Visualizer state — all per-frame mutables live here. Grouped so the
-    // Stage-C Visualizer class can absorb them as fields in one rename pass.
-    //   env/envTarget: smoothed band followers (fast attack, slow release)
-    //   detector: slow baselines for onset detection (bass + mid)
-    //   laserEnv: current kick envelope driving iKick uniform
-    //   drift: 2D spring offset (mid-onset impulses, damped return)
-    //   lastDriftKick: cooldown gate so drift kicks feel deliberate, not shaky
-    const visState = {
-      env:           { sub:0, bass:0, mid:0, air:0 },
-      envTarget:     { sub:0, bass:0, mid:0, air:0 },
-      detector:      { bassBaseline: 0.15, midBaseline: 0.15 },
-      laserEnv:      0,
-      drift:         { x: 0, y: 0, vx: 0, vy: 0 },
-      lastDriftKick: -10,
-    };
-
     // ═══════════════════════════════════════════════════════════
-    // 3 · THREE.JS SCENE — fullscreen plane with fragment shader
+    // 3 · SHADERS — vert/frag strings + caShader post-pass
+    //     Module-scope constants; Visualizer class owns the
+    //     ShaderMaterial/composer wiring that uses them.
     // ═══════════════════════════════════════════════════════════
-    const canvas = document.getElementById('gl');
-    const gfx = {};  // graphics handles — absorbed as this.* in Stage C
-    gfx.renderer = new THREE.WebGLRenderer({ canvas, antialias:false, powerPreference:'high-performance' });
-    gfx.renderer.setPixelRatio(Math.min(2, devicePixelRatio));
-    gfx.renderer.setSize(innerWidth, innerHeight, false);
 
-    gfx.scene = new THREE.Scene();
-    gfx.camera = new THREE.OrthographicCamera(-1,1,1,-1,0,1);
-
-    gfx.uniforms = {
-      iTime:        { value: 0 },
-      iResolution:  { value: new THREE.Vector2(innerWidth, innerHeight) },
-      iSub:         { value: 0 },
-      iBass:        { value: 0 },
-      iMid:         { value: 0 },
-      iAir:         { value: 0 },
-      iKick:        { value: 0 },   // transient onset (drum hit detector)
-      iDrift:       { value: new THREE.Vector2(0, 0) },  // camera bank offset
-      iText:        { value: null }, // CanvasTexture with banner text
-      iProgress:    { value: 0 }    // 0..1 through track
-    };
-
-    // ═══════════════════════════════════════════════════════════
     // BANNER TEXT — offscreen canvas rendered once, uploaded as
     // a wrapping texture. The tunnel shader samples it at one
     // depth band so the text reads as painted ONTO the tube wall.
-    // ═══════════════════════════════════════════════════════════
     function buildBannerTexture(text){
       const w = 2048, h = 128;
       const cvs = document.createElement('canvas');
@@ -427,9 +390,8 @@
       tex.needsUpdate = true;
       return tex;
     }
-    gfx.uniforms.iText.value = buildBannerTexture('EARLY AI-DOPTERS');
 
-    // Shader: starfield vacuum + central pulse (gfx.scene 1 placeholder)
+    // Shader: starfield vacuum + central pulse (scene 1 placeholder)
     // Vertex emits vUv (0..1 across the fullscreen plane) — DPR-invariant,
     // which is how we avoid the gl_FragCoord/iResolution DPR trap.
     const vert = /* glsl */`
@@ -791,20 +753,8 @@
       }
     `;
 
-    const mat = new THREE.ShaderMaterial({ uniforms: gfx.uniforms, vertexShader:vert, fragmentShader:frag });
-    const quad = new THREE.Mesh(new THREE.PlaneGeometry(2,2), mat);
-    gfx.scene.add(quad);
-
-    // Post chain
-    gfx.composer = new EffectComposer(gfx.renderer);
-    gfx.composer.setPixelRatio(Math.min(2, devicePixelRatio));
-    gfx.composer.setSize(innerWidth, innerHeight);
-    gfx.composer.addPass(new RenderPass(gfx.scene, gfx.camera));
-
-    const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.50, 0.42, 0.35);
-    gfx.composer.addPass(bloom);
-
-    // Chromatic aberration + grain pass
+    // Chromatic aberration + grain pass — shader definition only;
+    // the Visualizer class wires it into the composer chain.
     const caShader = {
       uniforms: {
         tDiffuse: { value: null },
@@ -839,9 +789,6 @@
         }
       `
     };
-    gfx.caPass = new ShaderPass(caShader);
-    gfx.composer.addPass(gfx.caPass);
-    gfx.composer.addPass(new OutputPass());
 
     // ═══════════════════════════════════════════════════════════
     // 4 · SYNC TIMELINE — section cues (editable by ear later)
@@ -1090,6 +1037,195 @@
 
     const ui = new UI(audioSource);
 
+    // ═══════════════════════════════════════════════════════════
+    // 6 · VISUALIZER — owns sim state + gfx handles + renderFrame.
+    //     Reads from audio + ui + timeline; writes to ui readouts
+    //     and the canvas via its own composer chain.
+    // ═══════════════════════════════════════════════════════════
+    class Visualizer {
+      constructor({ canvas, audioSource, ui, sections, currentSection }) {
+        this.audio = audioSource;
+        this.ui = ui;
+        this.sections = sections;
+        this.currentSection = currentSection;
+
+        // Per-frame mutable state:
+        //   env/envTarget: smoothed band followers (fast attack, slow release)
+        //   detector: slow baselines for onset detection (bass + mid)
+        //   laserEnv: current kick envelope driving iKick uniform
+        //   drift: 2D spring offset (mid-onset impulses, damped return)
+        //   lastDriftKick: cooldown gate so drift kicks feel deliberate
+        this.state = {
+          env:           { sub:0, bass:0, mid:0, air:0 },
+          envTarget:     { sub:0, bass:0, mid:0, air:0 },
+          detector:      { bassBaseline: 0.15, midBaseline: 0.15 },
+          laserEnv:      0,
+          drift:         { x: 0, y: 0, vx: 0, vy: 0 },
+          lastDriftKick: -10,
+        };
+
+        // FPS + section-change bookkeeping
+        this._fps = 60;
+        this._fpsAccum = 0;
+        this._fpsFrames = 0;
+        this._lastSectionT = -1;
+
+        // Renderer + scene
+        this.renderer = new THREE.WebGLRenderer({ canvas, antialias:false, powerPreference:'high-performance' });
+        this.renderer.setPixelRatio(Math.min(2, devicePixelRatio));
+        this.renderer.setSize(innerWidth, innerHeight, false);
+
+        this.scene = new THREE.Scene();
+        this.camera = new THREE.OrthographicCamera(-1,1,1,-1,0,1);
+
+        // Shader uniforms — shared between ShaderMaterial + renderFrame writes
+        this.uniforms = {
+          iTime:       { value: 0 },
+          iResolution: { value: new THREE.Vector2(innerWidth, innerHeight) },
+          iSub:        { value: 0 },
+          iBass:       { value: 0 },
+          iMid:        { value: 0 },
+          iAir:        { value: 0 },
+          iKick:       { value: 0 },   // transient onset (drum hit detector)
+          iDrift:      { value: new THREE.Vector2(0, 0) },  // camera bank offset
+          iText:       { value: null }, // CanvasTexture with banner text
+          iProgress:   { value: 0 }    // 0..1 through track
+        };
+        this.uniforms.iText.value = buildBannerTexture('EARLY AI-DOPTERS');
+
+        const mat = new THREE.ShaderMaterial({ uniforms: this.uniforms, vertexShader: vert, fragmentShader: frag });
+        const quad = new THREE.Mesh(new THREE.PlaneGeometry(2,2), mat);
+        this.scene.add(quad);
+
+        // Post chain: render → bloom → chromatic aberration + grain → output
+        this.composer = new EffectComposer(this.renderer);
+        this.composer.setPixelRatio(Math.min(2, devicePixelRatio));
+        this.composer.setSize(innerWidth, innerHeight);
+        this.composer.addPass(new RenderPass(this.scene, this.camera));
+
+        const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.50, 0.42, 0.35);
+        this.composer.addPass(bloom);
+
+        this.caPass = new ShaderPass(caShader);
+        this.composer.addPass(this.caPass);
+        this.composer.addPass(new OutputPass());
+      }
+
+      setBannerText(text) {
+        if (this.uniforms.iText.value) this.uniforms.iText.value.dispose();
+        this.uniforms.iText.value = buildBannerTexture(text);
+      }
+
+      resize() {
+        this.renderer.setSize(innerWidth, innerHeight, false);
+        this.composer.setSize(innerWidth, innerHeight);
+        this.uniforms.iResolution.value.set(innerWidth, innerHeight);
+      }
+
+      renderFrame(dt) {
+        const state = this.state;
+        const uniforms = this.uniforms;
+        const audio = this.audio;
+        const ui = this.ui;
+
+        const t = audio.currentTime || 0;
+        const dur = audio.duration || 193.8;
+
+        // Live FFT → band energies. When analyser is absent (not yet engaged,
+        // or file:// bundled-track pre-drop) everything stays at zero — visual
+        // runs flat with only ambient breath. Drop any MP3 to get the full
+        // reactive experience.
+        const bands = audio.getBandEnergies();
+        state.envTarget.sub  = bands.sub;
+        state.envTarget.bass = bands.bass;
+        state.envTarget.mid  = bands.mid;
+        state.envTarget.air  = bands.air;
+
+        // Envelope follower: fast attack, slower release
+        for (const k of ['sub','bass','mid','air']) {
+          const rate = state.envTarget[k] > state.env[k] ? 18 : 4; // per-second
+          state.env[k] += (state.envTarget[k] - state.env[k]) * Math.min(1, rate*dt);
+        }
+
+        // ─── ONSET DETECTOR (for laser transients) ────────────
+        // slow baseline follows average bass (~0.8s time constant)
+        state.detector.bassBaseline += (state.env.bass - state.detector.bassBaseline) * Math.min(1, 1.2*dt);
+        // onset = how much current bass exceeds its baseline
+        const onset = Math.max(0, state.env.bass - state.detector.bassBaseline - 0.06);
+        const kickTarget = Math.min(1, onset * 3.5);
+        // snap attack, ~0.33s decay
+        if (kickTarget > state.laserEnv) state.laserEnv = kickTarget;
+        else state.laserEnv *= Math.exp(-3.2 * dt);
+
+        // ─── CAMERA DRIFT (mid-onset spring impulses) ─────────
+        state.detector.midBaseline += (state.env.mid - state.detector.midBaseline) * Math.min(1, 1.0*dt);
+        const midOnsetRaw = state.env.mid - state.detector.midBaseline - 0.08;
+        const nowT = uniforms.iTime.value;
+        if (midOnsetRaw > 0.18 && nowT - state.lastDriftKick > 0.8) {
+          state.lastDriftKick = nowT;
+          const ang = Math.random() * Math.PI * 2;
+          const mag = 0.09 + Math.min(0.06, midOnsetRaw * 0.3);
+          state.drift.vx += Math.cos(ang) * mag;
+          state.drift.vy += Math.sin(ang) * mag;
+        }
+        // spring dynamics: F = -k·x − c·v  (critically damped, fast return)
+        const kSpring = 9.0, cDamp = 4.5;
+        state.drift.vx += (-kSpring * state.drift.x - cDamp * state.drift.vx) * dt;
+        state.drift.vy += (-kSpring * state.drift.y - cDamp * state.drift.vy) * dt;
+        state.drift.x += state.drift.vx * dt;
+        state.drift.y += state.drift.vy * dt;
+        // ambient slow breathing — always a tiny bit of drift even on silent verses
+        const ambX = Math.sin(nowT * 0.13) * 0.014;
+        const ambY = Math.cos(nowT * 0.19) * 0.014;
+        uniforms.iDrift.value.set(state.drift.x + ambX, state.drift.y + ambY);
+
+        uniforms.iTime.value += dt;
+        this.caPass.uniforms.iTime.value = uniforms.iTime.value;
+        uniforms.iSub.value  = state.env.sub;
+        uniforms.iBass.value = state.env.bass;
+        uniforms.iMid.value  = state.env.mid;
+        uniforms.iAir.value  = state.env.air;
+        uniforms.iKick.value = state.laserEnv;
+        uniforms.iProgress.value = dur ? t/dur : 0;
+
+        // Section label update
+        const cur = this.currentSection(t);
+        if (cur.t !== this._lastSectionT) {
+          this._lastSectionT = cur.t;
+          const idx = this.sections.indexOf(cur) + 1;
+          ui.setSceneLabel(cur.label, 'SCENE · ' + String(idx).padStart(2,'0'));
+        }
+
+        // FPS meter (EMA) — pass through only when a new sample lands
+        this._fpsFrames++; this._fpsAccum += dt;
+        let fpsNow;
+        if (this._fpsAccum >= 0.5) {
+          this._fps = this._fpsFrames/this._fpsAccum;
+          this._fpsAccum = 0;
+          this._fpsFrames = 0;
+          fpsNow = this._fps;
+        }
+
+        // UI readouts (batched — UI owns the DOM writes)
+        ui.setReadouts({
+          t,
+          progress: uniforms.iProgress.value,
+          sub: state.env.sub, bass: state.env.bass, mid: state.env.mid, air: state.env.air,
+          fps: fpsNow,
+        });
+
+        this.composer.render();
+      }
+    }
+
+    const viz = new Visualizer({
+      canvas: document.getElementById('gl'),
+      audioSource,
+      ui,
+      sections,
+      currentSection,
+    });
+
     // Fan-in: cross-cutting concerns the UI fires but doesn't own.
     ui.addEventListener('customtrack', () => {
       // Custom track → drop the hardcoded section timeline. Live FFT carries
@@ -1098,112 +1234,21 @@
       sections.push({ t: 0.0, label: 'CUSTOM TRACK · LIVE FFT' });
     });
     ui.addEventListener('banner', (e) => {
-      if (gfx.uniforms.iText.value) gfx.uniforms.iText.value.dispose();
-      gfx.uniforms.iText.value = buildBannerTexture(e.detail.text);
+      viz.setBannerText(e.detail.text);
     });
 
     addEventListener('resize', () => {
-      gfx.renderer.setSize(innerWidth, innerHeight, false);
-      gfx.composer.setSize(innerWidth, innerHeight);
-      gfx.uniforms.iResolution.value.set(innerWidth, innerHeight);
+      viz.resize();
     });
 
     // ═══════════════════════════════════════════════════════════
-    // 6 · RENDER LOOP — reactive envelope → shader gfx.uniforms
+    // 7 · RENDER LOOP — dt stamp → viz.renderFrame → rAF
     // ═══════════════════════════════════════════════════════════
     let last = performance.now();
-    let fps = 60, fpsAccum = 0, fpsFrames = 0;
-    let lastSectionT = -1;
-
-    function renderFrame(dt){
-      const t = audioSource.currentTime || 0;
-      const dur = audioSource.duration || 193.8;
-
-      // Live FFT → band energies. When analyser is absent (not yet engaged,
-      // or file:// bundled-track pre-drop) everything stays at zero — visual
-      // runs flat with only ambient breath. Drop any MP3 to get the full
-      // reactive experience.
-      const bands = audioSource.getBandEnergies();
-      visState.envTarget.sub  = bands.sub;
-      visState.envTarget.bass = bands.bass;
-      visState.envTarget.mid  = bands.mid;
-      visState.envTarget.air  = bands.air;
-
-      // Envelope follower: fast attack, slower release
-      for (const k of ['sub','bass','mid','air']) {
-        const rate = visState.envTarget[k] > visState.env[k] ? 18 : 4; // per-second
-        visState.env[k] += (visState.envTarget[k] - visState.env[k]) * Math.min(1, rate*dt);
-      }
-
-      // ─── ONSET DETECTOR (for laser transients) ────────────
-      // slow baseline follows average bass (~0.8s time constant)
-      visState.detector.bassBaseline += (visState.env.bass - visState.detector.bassBaseline) * Math.min(1, 1.2*dt);
-      // onset = how much current bass exceeds its baseline
-      const onset = Math.max(0, visState.env.bass - visState.detector.bassBaseline - 0.06);
-      const kickTarget = Math.min(1, onset * 3.5);
-      // snap attack, ~0.33s decay
-      if (kickTarget > visState.laserEnv) visState.laserEnv = kickTarget;
-      else visState.laserEnv *= Math.exp(-3.2 * dt);
-
-      // ─── CAMERA DRIFT (mid-onset spring impulses) ─────────
-      visState.detector.midBaseline += (visState.env.mid - visState.detector.midBaseline) * Math.min(1, 1.0*dt);
-      const midOnsetRaw = visState.env.mid - visState.detector.midBaseline - 0.08;
-      const nowT = gfx.uniforms.iTime.value;
-      if (midOnsetRaw > 0.18 && nowT - visState.lastDriftKick > 0.8) {
-        visState.lastDriftKick = nowT;
-        const ang = Math.random() * Math.PI * 2;
-        const mag = 0.09 + Math.min(0.06, midOnsetRaw * 0.3);
-        visState.drift.vx += Math.cos(ang) * mag;
-        visState.drift.vy += Math.sin(ang) * mag;
-      }
-      // spring dynamics: F = -k·x − c·v  (critically damped, fast return)
-      const kSpring = 9.0, cDamp = 4.5;
-      visState.drift.vx += (-kSpring * visState.drift.x - cDamp * visState.drift.vx) * dt;
-      visState.drift.vy += (-kSpring * visState.drift.y - cDamp * visState.drift.vy) * dt;
-      visState.drift.x += visState.drift.vx * dt;
-      visState.drift.y += visState.drift.vy * dt;
-      // ambient slow breathing — always a tiny bit of drift even on silent verses
-      const ambX = Math.sin(nowT * 0.13) * 0.014;
-      const ambY = Math.cos(nowT * 0.19) * 0.014;
-      gfx.uniforms.iDrift.value.set(visState.drift.x + ambX, visState.drift.y + ambY);
-
-      gfx.uniforms.iTime.value += dt;
-      gfx.caPass.uniforms.iTime.value = gfx.uniforms.iTime.value;
-      gfx.uniforms.iSub.value  = visState.env.sub;
-      gfx.uniforms.iBass.value = visState.env.bass;
-      gfx.uniforms.iMid.value  = visState.env.mid;
-      gfx.uniforms.iAir.value  = visState.env.air;
-      gfx.uniforms.iKick.value = visState.laserEnv;
-      gfx.uniforms.iProgress.value = dur ? t/dur : 0;
-
-      // Section label update
-      const cur = currentSection(t);
-      if (cur.t !== lastSectionT) {
-        lastSectionT = cur.t;
-        const idx = sections.indexOf(cur) + 1;
-        ui.setSceneLabel(cur.label, 'SCENE · ' + String(idx).padStart(2,'0'));
-      }
-
-      // FPS meter (EMA) — pass through only when a new sample lands
-      fpsFrames++; fpsAccum += dt;
-      let fpsNow;
-      if (fpsAccum >= 0.5) { fps = fpsFrames/fpsAccum; fpsAccum = 0; fpsFrames = 0; fpsNow = fps; }
-
-      // UI readouts (batched — UI owns the DOM writes)
-      ui.setReadouts({
-        t,
-        progress: gfx.uniforms.iProgress.value,
-        sub: visState.env.sub, bass: visState.env.bass, mid: visState.env.mid, air: visState.env.air,
-        fps: fpsNow,
-      });
-
-      gfx.composer.render();
-    }
-
     function tick(now){
       const dt = Math.min(0.05, (now - last)/1000);
       last = now;
-      renderFrame(dt);
+      viz.renderFrame(dt);
       requestAnimationFrame(tick);
     }
     requestAnimationFrame(tick);
