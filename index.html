@@ -859,201 +859,246 @@
     }
 
     // ═══════════════════════════════════════════════════════════
-    // 5 · UI WIRING
+    // 5 · UI — owns all DOM refs + event wiring; emits 'customtrack'
+    //         and 'banner' events for cross-cutting concerns
     // ═══════════════════════════════════════════════════════════
-    const boot = document.getElementById('boot');
-    const engageBtn = document.getElementById('engageBtn');
-    const btnPlayPause = document.getElementById('btnPlayPause');
-    const btnRestart = document.getElementById('btnRestart');
-    const btnMute = document.getElementById('btnMute');
-    const sessDate = document.getElementById('sessDate');
-    const sceneLabel = document.getElementById('sceneLabel');
-    const sceneTag = document.getElementById('sceneTag');
-    const lyric = document.getElementById('lyric');
-    const tCur = document.getElementById('tCur');
-    const tTot = document.getElementById('tTot');
-    const trackFill = document.getElementById('trackFill');
-    const stSub = document.getElementById('st-sub');
-    const stBass = document.getElementById('st-bass');
-    const stMid = document.getElementById('st-mid');
-    const stAir = document.getElementById('st-air');
-    const stFps = document.getElementById('st-fps');
-    const bootTitle = document.getElementById('bootTitle');
-    const bootSub = document.getElementById('bootSub');
-    const dropZone = document.getElementById('dropZone');
-    const fileInput = document.getElementById('fileInput');
-    const dropVeil = document.getElementById('dropVeil');
-    const headerLead = document.querySelector('.hdr .pill.lead');
+    class UI extends EventTarget {
+      constructor(audioSource) {
+        super();
+        this.audio = audioSource;
+        // Boot overlay
+        this.boot        = document.getElementById('boot');
+        this.bootTitle   = document.getElementById('bootTitle');
+        this.bootSub     = document.getElementById('bootSub');
+        this.engageBtn   = document.getElementById('engageBtn');
+        this.dropZone    = document.getElementById('dropZone');
+        this.fileInput   = document.getElementById('fileInput');
+        this.bannerInput = document.getElementById('bannerInput');
+        // Chrome (header + controls)
+        this.btnPlayPause = document.getElementById('btnPlayPause');
+        this.btnRestart   = document.getElementById('btnRestart');
+        this.btnMute      = document.getElementById('btnMute');
+        this.sessDate     = document.getElementById('sessDate');
+        this.sceneLabel   = document.getElementById('sceneLabel');
+        this.sceneTag     = document.getElementById('sceneTag');
+        this.tCur         = document.getElementById('tCur');
+        this.tTot         = document.getElementById('tTot');
+        this.trackFill    = document.getElementById('trackFill');
+        this.stSub        = document.getElementById('st-sub');
+        this.stBass       = document.getElementById('st-bass');
+        this.stMid        = document.getElementById('st-mid');
+        this.stAir        = document.getElementById('st-air');
+        this.stFps        = document.getElementById('st-fps');
+        this.dropVeil     = document.getElementById('dropVeil');
+        this.headerLead   = document.querySelector('.hdr .pill.lead');
+        this.volSlider    = document.getElementById('volSlider');
+        this.volVal       = document.getElementById('volVal');
+        this._bannerDebounce = 0;
+        this._dragDepth = 0;
 
-    sessDate.textContent = new Date().toISOString().slice(0,10).replace(/-/g,'.');
+        this.sessDate.textContent = new Date().toISOString().slice(0,10).replace(/-/g,'.');
+        this._applyFileGate();
+        this._wireAudioEvents();
+        this._wireEngage();
+        this._wireIngest();
+        this._wireBanner();
+        this._wirePlayback();
+        this._wireVolume();
+      }
 
-    // file:// trap — Chrome treats every file:// file as its own origin, so routing
-    // the bundled mp3 through createMediaElementSource mutes the graph (cross-origin
-    // taint). Worse: the taint sticks once the graph is wired, so engaging on the
-    // bundled track poisons any later drop too. Fix: on file://, disable ENGAGE
-    // until a file is dropped — the dropped blob URL is same-origin, graph wires
-    // clean, full audio + reactivity. HTTP serving is unaffected.
-    if (location.protocol === 'file:') {
-      bootSub.textContent = 'FILE:// — DROP ANY MP3 TO ENGAGE · OR SERVE VIA HTTP FOR BUNDLED TRACK';
-      bootSub.style.color = 'var(--lcars-e)';
-      engageBtn.disabled = true;
-      engageBtn.textContent = '▶ ENGAGE · DROP A SONG FIRST';
+      _fmt(s){ s = Math.max(0, s|0); return Math.floor(s/60)+':'+String(s%60).padStart(2,'0'); }
+
+      // file:// trap — Chrome treats every file:// file as its own origin, so routing
+      // the bundled mp3 through createMediaElementSource mutes the graph (cross-origin
+      // taint). Worse: the taint sticks once the graph is wired, so engaging on the
+      // bundled track poisons any later drop too. Fix: on file://, disable ENGAGE
+      // until a file is dropped — the dropped blob URL is same-origin, graph wires
+      // clean, full audio + reactivity. HTTP serving is unaffected.
+      _applyFileGate() {
+        if (location.protocol !== 'file:') return;
+        this.bootSub.textContent = 'FILE:// — DROP ANY MP3 TO ENGAGE · OR SERVE VIA HTTP FOR BUNDLED TRACK';
+        this.bootSub.style.color = 'var(--lcars-e)';
+        this.engageBtn.disabled = true;
+        this.engageBtn.textContent = '▶ ENGAGE · DROP A SONG FIRST';
+      }
+
+      _wireAudioEvents() {
+        // Audio error visibility — an audio that never loads makes ENGAGE a silent dead-end.
+        this.audio.addEventListener('error', () => {
+          const err = this.audio.el.error;
+          console.warn('audio element error', err ? err.code : '?', err);
+          if (!this.boot.classList.contains('hidden')) {
+            this.bootSub.textContent = 'BUNDLED TRACK FAILED — DROP AN MP3 INSTEAD';
+            this.bootSub.style.color = 'var(--lcars-e)';
+          }
+        });
+        this.audio.addEventListener('ended', () => { this.btnPlayPause.textContent = 'ENDED'; });
+        this.audio.addEventListener('play',  () => { this.btnPlayPause.textContent = 'PAUSE'; });
+        this.audio.addEventListener('pause', () => {
+          if (!this.audio.ended) this.btnPlayPause.textContent = 'PLAY';
+        });
+        this.audio.addEventListener('volumechange', () => {
+          this.btnMute.textContent = this.audio.muted ? 'UNMUTE' : 'MUTE';
+          this.btnMute.classList.toggle('active', this.audio.muted);
+        });
+        this.audio.addEventListener('loadedmetadata', () => {
+          this.tTot.textContent = this._fmt(this.audio.duration);
+        });
+      }
+
+      _wireEngage() {
+        this.engageBtn.addEventListener('click', async () => {
+          this.engageBtn.disabled = true;
+          const prevLabel = this.engageBtn.textContent;
+          this.engageBtn.textContent = '· · · ENGAGING · · ·';
+          try {
+            await this.audio.engage();
+            this.boot.classList.add('hidden');
+            this.sceneLabel.classList.add('on');
+          } catch (err) {
+            console.warn('ENGAGE failed:', err);
+            this.bootSub.textContent = 'ENGAGE FAILED — TAP ▼ TO DROP AN MP3';
+            this.bootSub.style.color = 'var(--lcars-e)';
+            this.engageBtn.textContent = prevLabel;
+            this.engageBtn.disabled = false;
+          }
+        });
+      }
+
+      async _ingestFile(file) {
+        const meta = await this.audio.ingestFile(file);
+        if (!meta) {
+          if (file) console.warn('File rejected — not audio:', file.name, file.type);
+          return;
+        }
+        // Update labels to reflect custom track (and clear any prior error state)
+        this.bootTitle.textContent = meta.name || 'CUSTOM INGEST';
+        this.bootSub.textContent   = 'LCARS · AV CORE · AUDIO INGESTED · PRESS ENGAGE';
+        this.bootSub.style.color   = '';
+        this.engageBtn.disabled    = false;
+        this.engageBtn.textContent = '▶ ENGAGE';
+        if (this.headerLead) this.headerLead.textContent = meta.name || 'CUSTOM TRACK';
+        // Fan out — SceneTimeline (or current sections[] owner) clears on this event.
+        this.dispatchEvent(new CustomEvent('customtrack', { detail: meta }));
+        // If already past boot (user dropped mid-play), resume immediately
+        if (this.boot.classList.contains('hidden')) {
+          try { await this.audio.engage(); this.btnPlayPause.textContent = 'PAUSE'; } catch (e) {}
+        }
+      }
+
+      _wireIngest() {
+        // Boot-zone visual feedback + explicit drop handler. The dropZone is a <label>
+        // wrapping a hidden <input type=file>; Chrome routes drops on the label into
+        // the input, but display:none keeps the input from firing change. So we
+        // handle drop directly on the zone and stop the event so window-level drop
+        // doesn't also ingest the same file twice.
+        this.dropZone.addEventListener('click', () => this.fileInput.click());
+        this.fileInput.addEventListener('change', (e) => {
+          if (e.target.files[0]) this._ingestFile(e.target.files[0]);
+        });
+        for (const evt of ['dragenter','dragover']) {
+          this.dropZone.addEventListener(evt, (e) => { e.preventDefault(); this.dropZone.classList.add('hot'); });
+        }
+        this.dropZone.addEventListener('dragleave', () => this.dropZone.classList.remove('hot'));
+        this.dropZone.addEventListener('drop', async (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          this.dropZone.classList.remove('hot');
+          const file = e.dataTransfer?.files?.[0];
+          if (file) await this._ingestFile(file);
+        });
+        // Global window-level drag&drop (works pre- AND post-engage)
+        window.addEventListener('dragenter', (e) => {
+          if (!e.dataTransfer || !e.dataTransfer.types.includes('Files')) return;
+          this._dragDepth++;
+          if (this.boot.classList.contains('hidden')) this.dropVeil.classList.add('on');
+        });
+        window.addEventListener('dragleave', () => {
+          this._dragDepth = Math.max(0, this._dragDepth - 1);
+          if (this._dragDepth === 0) this.dropVeil.classList.remove('on');
+        });
+        window.addEventListener('dragover', (e) => { e.preventDefault(); });
+        window.addEventListener('drop', async (e) => {
+          e.preventDefault();
+          this._dragDepth = 0;
+          this.dropVeil.classList.remove('on');
+          const file = e.dataTransfer?.files?.[0];
+          if (file) await this._ingestFile(file);
+        });
+      }
+
+      // Banner text editor — emit 'banner' event with debounced text; App swaps
+      // the CanvasTexture on the shader side.
+      _wireBanner() {
+        this.bannerInput.addEventListener('input', () => {
+          clearTimeout(this._bannerDebounce);
+          this._bannerDebounce = setTimeout(() => {
+            const text = (this.bannerInput.value || 'EARLY AI-DOPTERS').trim().toUpperCase();
+            this.dispatchEvent(new CustomEvent('banner', { detail: { text } }));
+          }, 180);
+        });
+        // Prevent the text-edit click from bubbling into the drop zone
+        this.bannerInput.addEventListener('click', (e) => e.stopPropagation());
+      }
+
+      _wirePlayback() {
+        this.btnPlayPause.addEventListener('click', async () => {
+          if (!this.audio.isEngaged) return;
+          // After the track ends, paused is true — native play() would restart
+          // from 0, which feels wrong. Ignore; user must hit RESTART explicitly.
+          if (this.audio.ended) return;
+          if (this.audio.paused) { await this.audio.play(); this.btnPlayPause.textContent='PAUSE'; }
+          else { this.audio.pause(); this.btnPlayPause.textContent='PLAY'; }
+        });
+        this.btnRestart.addEventListener('click', async () => {
+          try { await this.audio.restart(); this.btnPlayPause.textContent = 'PAUSE'; } catch (e) {}
+        });
+        this.btnMute.addEventListener('click', () => {
+          const muted = this.audio.toggleMute();
+          this.btnMute.textContent = muted ? 'UNMUTE' : 'MUTE';
+          this.btnMute.classList.toggle('active', muted);
+        });
+      }
+
+      _wireVolume() {
+        const apply = (pct) => {
+          this.audio.setVolume(pct);
+          this.volVal.textContent = String(pct|0);
+          this.volSlider.style.setProperty('--vol-pct', (pct|0)+'%');
+        };
+        apply(parseInt(this.volSlider.value, 10));
+        this.volSlider.addEventListener('input', (e) => apply(parseInt(e.target.value, 10)));
+      }
+
+      // Per-frame display updates (called from render loop)
+      setSceneLabel(text, tagText) {
+        this.sceneLabel.textContent = text;
+        this.sceneTag.textContent = tagText;
+      }
+      setReadouts({ t, progress, sub, bass, mid, air, fps }) {
+        this.tCur.textContent = this._fmt(t);
+        this.trackFill.style.width = (progress*100).toFixed(1) + '%';
+        this.stSub.textContent  = sub.toFixed(2);
+        this.stBass.textContent = bass.toFixed(2);
+        this.stMid.textContent  = mid.toFixed(2);
+        this.stAir.textContent  = air.toFixed(2);
+        if (fps !== undefined) this.stFps.textContent = fps.toFixed(0);
+      }
     }
 
-    function fmt(s){ s = Math.max(0,s|0); return Math.floor(s/60)+':'+String(s%60).padStart(2,'0'); }
+    const ui = new UI(audioSource);
 
-    // Audio error visibility — an audio that never loads makes ENGAGE a silent dead-end. Surface it.
-    audioSource.addEventListener('error', () => {
-      const err = audioSource.el.error;
-      const code = err ? err.code : '?';
-      console.warn('audio element error', code, err);
-      if (!boot.classList.contains('hidden')) {
-        bootSub.textContent = 'BUNDLED TRACK FAILED — DROP AN MP3 INSTEAD';
-        bootSub.style.color = 'var(--lcars-e)';
-      }
-    });
-
-    engageBtn.addEventListener('click', async () => {
-      engageBtn.disabled = true;
-      const prevLabel = engageBtn.textContent;
-      engageBtn.textContent = '· · · ENGAGING · · ·';
-      try {
-        await audioSource.engage();
-        boot.classList.add('hidden');
-        sceneLabel.classList.add('on');
-      } catch (err) {
-        console.warn('ENGAGE failed:', err);
-        bootSub.textContent = 'ENGAGE FAILED — TAP ▼ TO DROP AN MP3';
-        bootSub.style.color = 'var(--lcars-e)';
-        engageBtn.textContent = prevLabel;
-        engageBtn.disabled = false;
-      }
-    });
-
-    // ═══════════════════════════════════════════════════════════
-    // UNIVERSAL AUDIO INGEST — file picker + global drag/drop
-    // ═══════════════════════════════════════════════════════════
-    async function ingestAudioFile(file) {
-      const meta = await audioSource.ingestFile(file);
-      if (!meta) {
-        if (file) console.warn('File rejected — not audio:', file.name, file.type);
-        return;
-      }
-
+    // Fan-in: cross-cutting concerns the UI fires but doesn't own.
+    ui.addEventListener('customtrack', () => {
       // Custom track → drop the hardcoded section timeline. Live FFT carries
       // the visual (pre-computed bands path was removed earlier in sprint 1).
       sections.length = 0;
       sections.push({ t: 0.0, label: 'CUSTOM TRACK · LIVE FFT' });
-
-      // Update labels to reflect custom track (and clear any prior error state)
-      bootTitle.textContent = meta.name || 'CUSTOM INGEST';
-      bootSub.textContent   = 'LCARS · AV CORE · AUDIO INGESTED · PRESS ENGAGE';
-      bootSub.style.color   = '';
-      engageBtn.disabled    = false;
-      engageBtn.textContent = '▶ ENGAGE';
-      if (headerLead) headerLead.textContent = meta.name || 'CUSTOM TRACK';
-
-      // If already past boot (user dropped mid-play), resume immediately
-      if (boot.classList.contains('hidden')) {
-        try {
-          await audioSource.engage();
-          btnPlayPause.textContent = 'PAUSE';
-        } catch (e) {}
-      }
-    }
-
-    dropZone.addEventListener('click', () => fileInput.click());
-    fileInput.addEventListener('change', (e) => { if (e.target.files[0]) ingestAudioFile(e.target.files[0]); });
-
-    // Banner text editor — swap the CanvasTexture on change, live.
-    const bannerInput = document.getElementById('bannerInput');
-    let bannerDebounce = 0;
-    function refreshBanner(){
-      const txt = (bannerInput.value || 'EARLY AI-DOPTERS').trim().toUpperCase();
+    });
+    ui.addEventListener('banner', (e) => {
       if (uniforms.iText.value) uniforms.iText.value.dispose();
-      uniforms.iText.value = buildBannerTexture(txt);
-    }
-    bannerInput.addEventListener('input', () => {
-      clearTimeout(bannerDebounce);
-      bannerDebounce = setTimeout(refreshBanner, 180);
+      uniforms.iText.value = buildBannerTexture(e.detail.text);
     });
-    // Prevent the text-edit click from bubbling into the drop zone
-    bannerInput.addEventListener('click', (e) => e.stopPropagation());
-
-    // Boot-zone visual feedback + explicit drop handler. The dropZone is a <label>
-    // wrapping a hidden <input type=file>; Chrome routes drops on the label into
-    // the input, but display:none keeps the input from firing change. So we
-    // handle drop directly on the zone and stop the event so window-level drop
-    // (which is set up further down) doesn't also ingest the same file twice.
-    ['dragenter','dragover'].forEach(evt => dropZone.addEventListener(evt, (e)=>{ e.preventDefault(); dropZone.classList.add('hot'); }));
-    dropZone.addEventListener('dragleave', () => dropZone.classList.remove('hot'));
-    dropZone.addEventListener('drop', async (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      dropZone.classList.remove('hot');
-      const file = e.dataTransfer?.files?.[0];
-      if (file) await ingestAudioFile(file);
-    });
-
-    // Global window-level drag&drop (works pre- AND post-engage)
-    let dragDepth = 0;
-    window.addEventListener('dragenter', (e) => {
-      if (!e.dataTransfer || !e.dataTransfer.types.includes('Files')) return;
-      dragDepth++;
-      if (boot.classList.contains('hidden')) dropVeil.classList.add('on');
-    });
-    window.addEventListener('dragleave', () => {
-      dragDepth = Math.max(0, dragDepth - 1);
-      if (dragDepth === 0) dropVeil.classList.remove('on');
-    });
-    window.addEventListener('dragover', (e) => { e.preventDefault(); });
-    window.addEventListener('drop', async (e) => {
-      e.preventDefault();
-      dragDepth = 0;
-      dropVeil.classList.remove('on');
-      const file = e.dataTransfer?.files?.[0];
-      if (file) await ingestAudioFile(file);
-    });
-
-    btnPlayPause.addEventListener('click', async () => {
-      if (!audioSource.isEngaged) return;
-      // After the track ends, paused is true — native play() would restart
-      // from 0, which feels wrong. Ignore; user must hit RESTART explicitly.
-      if (audioSource.ended) return;
-      if (audioSource.paused) { await audioSource.play(); btnPlayPause.textContent='PAUSE'; }
-      else { audioSource.pause(); btnPlayPause.textContent='PLAY'; }
-    });
-    // Reflect end-of-track + play in the button so it's clearly non-interactive.
-    audioSource.addEventListener('ended', () => { btnPlayPause.textContent = 'ENDED'; });
-    audioSource.addEventListener('play',  () => { btnPlayPause.textContent = 'PAUSE'; });
-    audioSource.addEventListener('pause', () => {
-      if (!audioSource.ended) btnPlayPause.textContent = 'PLAY';
-    });
-    btnRestart.addEventListener('click', async () => {
-      try { await audioSource.restart(); btnPlayPause.textContent = 'PAUSE'; } catch (e) {}
-    });
-    btnMute.addEventListener('click', () => {
-      const muted = audioSource.toggleMute();
-      btnMute.textContent = muted ? 'UNMUTE' : 'MUTE';
-      btnMute.classList.toggle('active', muted);
-    });
-    audioSource.addEventListener('volumechange', () => {
-      btnMute.textContent = audioSource.muted ? 'UNMUTE' : 'MUTE';
-      btnMute.classList.toggle('active', audioSource.muted);
-    });
-
-    // — Volume slider — drives audioSource.setVolume(). Persists across track swaps.
-    const volSlider = document.getElementById('volSlider');
-    const volVal    = document.getElementById('volVal');
-    function applyVolume(pct){
-      audioSource.setVolume(pct);
-      volVal.textContent = String(pct|0);
-      volSlider.style.setProperty('--vol-pct', (pct|0)+'%');
-    }
-    applyVolume(parseInt(volSlider.value,10));
-    volSlider.addEventListener('input', (e) => applyVolume(parseInt(e.target.value,10)));
-
-    audioSource.addEventListener('loadedmetadata', () => { tTot.textContent = fmt(audioSource.duration); });
 
     addEventListener('resize', () => {
       renderer.setSize(innerWidth, innerHeight, false);
@@ -1136,22 +1181,22 @@
       const cur = currentSection(t);
       if (cur.t !== lastSectionT) {
         lastSectionT = cur.t;
-        sceneLabel.textContent = cur.label;
         const idx = sections.indexOf(cur) + 1;
-        sceneTag.textContent = 'SCENE · ' + String(idx).padStart(2,'0');
+        ui.setSceneLabel(cur.label, 'SCENE · ' + String(idx).padStart(2,'0'));
       }
 
-      // UI readouts
-      tCur.textContent = fmt(t);
-      trackFill.style.width = (uniforms.iProgress.value*100).toFixed(1) + '%';
-      stSub.textContent  = env.sub.toFixed(2);
-      stBass.textContent = env.bass.toFixed(2);
-      stMid.textContent  = env.mid.toFixed(2);
-      stAir.textContent  = env.air.toFixed(2);
-
-      // FPS meter (EMA)
+      // FPS meter (EMA) — pass through only when a new sample lands
       fpsFrames++; fpsAccum += dt;
-      if (fpsAccum >= 0.5) { fps = fpsFrames/fpsAccum; fpsAccum = 0; fpsFrames = 0; stFps.textContent = fps.toFixed(0); }
+      let fpsNow;
+      if (fpsAccum >= 0.5) { fps = fpsFrames/fpsAccum; fpsAccum = 0; fpsFrames = 0; fpsNow = fps; }
+
+      // UI readouts (batched — UI owns the DOM writes)
+      ui.setReadouts({
+        t,
+        progress: uniforms.iProgress.value,
+        sub: env.sub, bass: env.bass, mid: env.mid, air: env.air,
+        fps: fpsNow,
+      });
 
       composer.render();
       requestAnimationFrame(tick);
