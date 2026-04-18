@@ -2,7 +2,11 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1" />
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+<meta name="theme-color" content="#000000" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 <title>MOONS OF SATURN · LCARS DEMO</title>
 <style>
   /* ═══════════════════════════════════════════════════════════════
@@ -59,8 +63,8 @@
   .track .fill{position:absolute;inset:0;width:0;background:#000;transition:width .08s linear}
   .track .t{font-variant-numeric:tabular-nums;font-weight:700;font-size:12px;min-width:9ch;text-align:right}
 
-  /* — SCENE LABEL (bottom-left floating) — */
-  .scene-label{position:absolute;z-index:3;left:16px;bottom:96px;color:var(--cyan);font-size:11px;letter-spacing:0.24em;text-transform:uppercase;opacity:0;transition:opacity .8s;text-shadow:0 0 18px var(--cyan)}
+  /* — SCENE LABEL (floats just right of the left rail so it never collides with the BANDS/FFT/KBPS chips) — */
+  .scene-label{position:absolute;z-index:3;left:176px;bottom:96px;color:var(--cyan);font-size:11px;letter-spacing:0.24em;text-transform:uppercase;opacity:0;transition:opacity .8s;text-shadow:0 0 18px var(--cyan);pointer-events:none}
   .scene-label.on{opacity:0.85}
 
   /* — LYRIC LINE (center bottom, floating) — */
@@ -94,13 +98,39 @@
   .status{position:absolute;z-index:3;right:10px;top:68px;font-size:10px;letter-spacing:0.1em;color:var(--ink-dim);font-family:ui-monospace,Consolas,monospace;line-height:1.7;text-align:right;pointer-events:none}
   .status .val{color:var(--cyan)}
 
-  /* Responsiveness */
-  @media (max-width:780px){
-    body{grid-template-columns:80px 1fr;grid-template-rows:48px 1fr 68px}
-    .rail .pill{font-size:10px}
-    .rail .pill.hero{font-size:12px;height:48px}
-    .ftr{grid-template-columns:80px 1fr auto}
-    .pill{font-size:11px}
+  /* — VOLUME SLIDER (LCARS-skinned) — */
+  .vol{display:flex;flex-direction:column;gap:4px;padding:6px 10px;border-radius:18px;background:rgba(34,211,238,0.06);border:1px solid var(--cyan-dim)}
+  .vol .vol-label{display:flex;justify-content:space-between;align-items:center;font-size:10px;letter-spacing:0.22em;color:var(--ink-dim);text-transform:uppercase}
+  .vol .vol-label .val{color:var(--cyan);font-variant-numeric:tabular-nums;font-weight:700}
+  .vol input[type=range]{appearance:none;-webkit-appearance:none;width:100%;height:18px;background:transparent;margin:0;touch-action:manipulation}
+  .vol input[type=range]::-webkit-slider-runnable-track{height:4px;background:linear-gradient(to right,var(--cyan) 0,var(--cyan) var(--vol-pct,60%),rgba(123,163,184,0.35) var(--vol-pct,60%),rgba(123,163,184,0.35) 100%);border-radius:2px}
+  .vol input[type=range]::-moz-range-track{height:4px;background:rgba(123,163,184,0.35);border-radius:2px}
+  .vol input[type=range]::-moz-range-progress{height:4px;background:var(--cyan);border-radius:2px}
+  .vol input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:16px;height:16px;margin-top:-6px;border-radius:50%;background:var(--lcars-a);border:2px solid #000;box-shadow:0 0 8px rgba(255,156,0,.6);cursor:pointer}
+  .vol input[type=range]::-moz-range-thumb{width:14px;height:14px;border-radius:50%;background:var(--lcars-a);border:2px solid #000;box-shadow:0 0 8px rgba(255,156,0,.6);cursor:pointer}
+  .vol input[type=range]:focus{outline:none}
+
+  /* Canvas should swallow touch gestures instead of scrolling / pinch-zooming the page */
+  canvas#gl{touch-action:none}
+
+  /* Responsiveness — tablet portrait (most Android tablets) and phones */
+  @media (max-width:900px){
+    body{grid-template-columns:96px 1fr;grid-template-rows:48px 1fr 68px}
+    .rail{padding:4px}
+    .rail .pill{font-size:10px;padding:0 10px;height:30px}
+    .rail .pill.hero{font-size:12px;height:44px}
+    .ftr{grid-template-columns:96px 1fr auto;padding:4px}
+    .pill{font-size:11px;padding:0 12px}
+    .scene-label{left:108px;bottom:80px;font-size:10px}
+    .lyric{font-size:16px;bottom:96px}
+    .status{font-size:9px}
+    .vol{padding:4px 8px}
+    .vol .vol-label{font-size:9px;letter-spacing:0.14em}
+  }
+  @media (max-width:520px){
+    body{grid-template-columns:72px 1fr}
+    .scene-label{left:82px}
+    .hdr .pill{padding:0 10px}
   }
 </style>
 </head>
@@ -158,6 +188,10 @@
     <div class="pill b btn" id="btnPlayPause">PAUSE</div>
     <div class="pill d btn" id="btnRestart">RESTART</div>
     <div class="pill c btn" id="btnMute">MUTE</div>
+    <div class="vol">
+      <div class="vol-label"><span>VOL</span><span class="val" id="volVal">80</span></div>
+      <input type="range" id="volSlider" min="0" max="100" step="1" value="80" aria-label="Volume">
+    </div>
     <div class="spacer"></div>
     <div class="pill muted">BANDS · 4</div>
     <div class="pill muted">FFT · 2048</div>
@@ -175,7 +209,10 @@
     <div class="pill" style="background:var(--lcars-a);color:#000">48.0 KHZ</div>
   </div>
 
-  <audio id="audio" src="moons-of-saturn-energy.mp3" preload="auto" crossorigin="anonymous"></audio>
+  <!-- No `crossorigin` on the bundled source: on same-origin hosts (GitHub Pages, a local static
+       server, file://) it's unnecessary, and it silently broke ENGAGE on some configs yesterday.
+       `playsinline` keeps iOS/Android from hijacking playback into full-screen. -->
+  <audio id="audio" src="moons-of-saturn-energy.mp3" preload="auto" playsinline></audio>
 
   <!-- Three.js via CDN import map -->
   <script type="importmap">
@@ -754,14 +791,56 @@
 
     sessDate.textContent = new Date().toISOString().slice(0,10).replace(/-/g,'.');
 
+    // file:// trap — Chrome mutes MediaElementSource output for cross-origin media, and every
+    // file:// file is its own origin. Result: ENGAGE on the bundled track gives silent playback
+    // (UI runs, currentTime advances, no sound). Dropped files work because blob: URLs are
+    // same-origin to this page. Warn proactively so this isn't a silent dead-end.
+    if (location.protocol === 'file:') {
+      bootSub.textContent = 'FILE:// — BUNDLED TRACK WILL BE SILENT · DROP AN MP3 OR SERVE VIA HTTP';
+      bootSub.style.color = 'var(--lcars-e)';
+    }
+
     function fmt(s){ s = Math.max(0,s|0); return Math.floor(s/60)+':'+String(s%60).padStart(2,'0'); }
 
+    // Audio error visibility — an audio that never loads makes ENGAGE a silent dead-end. Surface it.
+    audio.addEventListener('error', (e) => {
+      const err = audio.error;
+      const code = err ? err.code : '?';
+      console.warn('audio element error', code, err);
+      if (!boot.classList.contains('hidden')) {
+        bootSub.textContent = 'BUNDLED TRACK FAILED — DROP AN MP3 INSTEAD';
+        bootSub.style.color = 'var(--lcars-e)';
+      }
+    });
+
     engageBtn.addEventListener('click', async () => {
-      ensureAudioGraph();
-      if (ac.state === 'suspended') await ac.resume();
-      await audio.play();
-      boot.classList.add('hidden');
-      sceneLabel.classList.add('on');
+      engageBtn.disabled = true;
+      const prevLabel = engageBtn.textContent;
+      engageBtn.textContent = '· · · ENGAGING · · ·';
+      try {
+        ensureAudioGraph();
+        if (ac && ac.state === 'suspended') await ac.resume();
+        // If readyState is 0, the source hasn't loaded. Kick a load and wait briefly.
+        if (audio.readyState < 2) {
+          try { audio.load(); } catch (e) {}
+          await new Promise((resolve) => {
+            let done = false;
+            const settle = () => { if (done) return; done = true; resolve(); };
+            audio.addEventListener('canplay', settle, { once: true });
+            audio.addEventListener('error',   settle, { once: true });
+            setTimeout(settle, 2500); // don't hang forever
+          });
+        }
+        await audio.play();
+        boot.classList.add('hidden');
+        sceneLabel.classList.add('on');
+      } catch (err) {
+        console.warn('ENGAGE failed:', err);
+        bootSub.textContent = 'ENGAGE FAILED — TAP ▼ TO DROP AN MP3';
+        bootSub.style.color = 'var(--lcars-e)';
+        engageBtn.textContent = prevLabel;
+        engageBtn.disabled = false;
+      }
     });
 
     // ═══════════════════════════════════════════════════════════
@@ -789,10 +868,13 @@
       sections.length = 0;
       sections.push({ t: 0.0, label: 'CUSTOM TRACK · LIVE FFT' });
 
-      // Update labels to reflect custom track
+      // Update labels to reflect custom track (and clear any prior error state)
       const name = file.name.replace(/\.[^.]+$/, '').toUpperCase().slice(0, 48);
       bootTitle.textContent = name || 'CUSTOM INGEST';
       bootSub.textContent   = 'LCARS · AV CORE · AUDIO INGESTED · PRESS ENGAGE';
+      bootSub.style.color   = '';
+      engageBtn.disabled    = false;
+      engageBtn.textContent = '▶ ENGAGE';
       if (headerLead) headerLead.textContent = name || 'CUSTOM TRACK';
 
       // If already past boot (user dropped mid-play), resume immediately
@@ -862,6 +944,24 @@
       btnMute.textContent = audio.muted ? 'UNMUTE' : 'MUTE';
       btnMute.classList.toggle('active', audio.muted);
     });
+
+    // — Volume slider — lives on audio.volume (0..1). Persists across track swaps.
+    const volSlider = document.getElementById('volSlider');
+    const volVal    = document.getElementById('volVal');
+    function applyVolume(pct){
+      const v = Math.max(0, Math.min(1, pct/100));
+      audio.volume = v;
+      volVal.textContent = String(pct|0);
+      volSlider.style.setProperty('--vol-pct', (pct|0)+'%');
+      // Auto-unmute when user drags up from zero while muted
+      if (v > 0 && audio.muted) {
+        audio.muted = false;
+        btnMute.textContent = 'MUTE';
+        btnMute.classList.remove('active');
+      }
+    }
+    applyVolume(parseInt(volSlider.value,10));
+    volSlider.addEventListener('input', (e) => applyVolume(parseInt(e.target.value,10)));
 
     audio.addEventListener('loadedmetadata', () => { tTot.textContent = fmt(audio.duration); });
 
