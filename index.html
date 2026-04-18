@@ -643,9 +643,12 @@
       cvs.width = s; cvs.height = s;
       const ctx = cvs.getContext('2d');
       const g = ctx.createRadialGradient(s/2, s/2, 0, s/2, s/2, s/2);
+      // Tighter falloff so each speck stays distinct under additive
+      // blending on top of the bloomed composer output. A long soft
+      // tail stacks into white haze near the vanishing point.
       g.addColorStop(0.00, 'rgba(255,255,255,1.0)');
-      g.addColorStop(0.35, 'rgba(255,255,255,0.55)');
-      g.addColorStop(0.75, 'rgba(255,255,255,0.08)');
+      g.addColorStop(0.25, 'rgba(255,255,255,0.45)');
+      g.addColorStop(0.55, 'rgba(255,255,255,0.06)');
       g.addColorStop(1.00, 'rgba(255,255,255,0.0)');
       ctx.fillStyle = g;
       ctx.fillRect(0, 0, s, s);
@@ -1574,13 +1577,14 @@
         this.fgCamera = new THREE.PerspectiveCamera(70, innerWidth / Math.max(1, innerHeight), 0.1, 200);
         this.fgCamera.position.set(0, 0, 0);
         this.fgCamera.lookAt(0, 0, -1);
-        const N = 900;
+        const N = 700;
         const pos = new Float32Array(N * 3);
         for (let i = 0; i < N; i++) {
           const ang = Math.random() * Math.PI * 2;
-          // Annular radius — keep particles outside the tunnel core so
-          // the center of the shader scene stays readable.
-          const r = 1.4 + Math.random() * 5.5;
+          // Annular radius — bias outward with sqrt so fewer sprites
+          // pile up near the vanishing point. Keeps the tunnel core
+          // readable and stops the center from washing to white haze.
+          const r = 2.0 + Math.sqrt(Math.random()) * 5.5;
           pos[i*3]   = Math.cos(ang) * r;
           pos[i*3+1] = Math.sin(ang) * r;
           pos[i*3+2] = -0.5 - Math.random() * 35;
@@ -1592,7 +1596,7 @@
           map: buildSpriteTexture(),
           size: 0.55,
           transparent: true,
-          opacity: 1.0,
+          opacity: 0.65,
           depthTest: false,
           depthWrite: false,
           blending: THREE.AdditiveBlending,
@@ -1612,10 +1616,11 @@
           pos[i+2] += speed * dt;
           if (pos[i+2] > 0.5) {
             // Loop back to far — re-roll position so the field doesn't
-            // settle into visible columns.
+            // settle into visible columns. Same sqrt-biased radius as
+            // init so the outward-weighted distribution is preserved.
             pos[i+2] = -35;
             const ang = Math.random() * Math.PI * 2;
-            const r = 1.4 + Math.random() * 5.5;
+            const r = 2.0 + Math.sqrt(Math.random()) * 5.5;
             pos[i]   = Math.cos(ang) * r;
             pos[i+1] = Math.sin(ang) * r;
           }
