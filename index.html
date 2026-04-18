@@ -1,0 +1,894 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>MOONS OF SATURN · LCARS DEMO</title>
+<style>
+  /* ═══════════════════════════════════════════════════════════════
+     LCARS CHROME — Trek computer skin wrapping a demoscene canvas.
+     Palette: inspired by the cover art (cyan Saturn on dark) with
+     classic LCARS warm accents.
+     ═══════════════════════════════════════════════════════════════ */
+  :root{
+    --bg:#000;
+    --ink:#e6f1ff;
+    --ink-dim:#7ba3b8;
+    --lcars-a:#ff9c00;   /* amber */
+    --lcars-b:#ffcc66;   /* butter */
+    --lcars-c:#cc99cc;   /* mauve  */
+    --lcars-d:#99ccff;   /* ice    */
+    --lcars-e:#f06a6a;   /* alert  */
+    --cyan:#22d3ee;
+    --cyan-dim:#0e7490;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%;background:var(--bg);color:var(--ink);overflow:hidden;font-family:'Okuda','Antonio','Arial Narrow',system-ui,sans-serif;font-stretch:condensed;letter-spacing:0.04em}
+  body{display:grid;grid-template-rows:56px 1fr 80px;grid-template-columns:160px 1fr}
+
+  /* — CANVAS — spans the center */
+  #stage{position:absolute;inset:0;z-index:0}
+  canvas#gl{position:absolute;inset:0;width:100%;height:100%;display:block;background:#000}
+
+  /* — HEADER BAR (top) — */
+  .hdr{grid-column:1/3;grid-row:1;position:relative;z-index:2;display:flex;align-items:stretch;gap:6px;padding:6px;background:transparent}
+  .pill{background:var(--lcars-a);color:#000;display:flex;align-items:center;padding:0 18px;border-radius:24px;font-weight:700;text-transform:uppercase;font-size:14px;letter-spacing:0.14em;white-space:nowrap}
+  .pill.lead{border-top-left-radius:0;border-bottom-left-radius:0;padding-left:28px}
+  .pill.b{background:var(--lcars-b)}
+  .pill.c{background:var(--lcars-c)}
+  .pill.d{background:var(--lcars-d)}
+  .pill.muted{background:transparent;border:1px solid var(--ink-dim);color:var(--ink-dim)}
+  .pill.grow{flex:1}
+  .pill small{opacity:0.75;font-weight:400;margin-left:8px;letter-spacing:0.1em}
+
+  /* — LEFT RAIL — */
+  .rail{grid-column:1;grid-row:2;position:relative;z-index:2;display:flex;flex-direction:column;gap:6px;padding:6px 6px 6px 6px}
+  .rail .pill{height:36px;justify-content:flex-start;font-size:12px;padding:0 14px}
+  .rail .pill.hero{background:var(--lcars-a);height:64px;font-size:18px}
+  .rail .spacer{flex:1}
+  .rail .pill.btn{cursor:pointer;user-select:none;transition:filter .15s}
+  .rail .pill.btn:hover{filter:brightness(1.15)}
+  .rail .pill.btn:active{filter:brightness(0.85)}
+  .rail .pill.active{outline:2px solid var(--cyan);outline-offset:2px}
+
+  /* — FOOTER BAR — */
+  .ftr{grid-column:1/3;grid-row:3;position:relative;z-index:2;display:grid;grid-template-columns:160px 1fr auto;gap:6px;padding:6px;align-items:stretch}
+  .ftr .pill{height:100%}
+  .ftr .track{display:flex;align-items:center;gap:10px;padding:0 18px;background:var(--lcars-d);color:#000;border-radius:24px;font-weight:700;text-transform:uppercase;font-size:13px;letter-spacing:0.14em}
+  .track .bar{flex:1;height:8px;background:rgba(0,0,0,.3);border-radius:4px;overflow:hidden;position:relative}
+  .track .fill{position:absolute;inset:0;width:0;background:#000;transition:width .08s linear}
+  .track .t{font-variant-numeric:tabular-nums;font-weight:700;font-size:12px;min-width:9ch;text-align:right}
+
+  /* — SCENE LABEL (bottom-left floating) — */
+  .scene-label{position:absolute;z-index:3;left:16px;bottom:96px;color:var(--cyan);font-size:11px;letter-spacing:0.24em;text-transform:uppercase;opacity:0;transition:opacity .8s;text-shadow:0 0 18px var(--cyan)}
+  .scene-label.on{opacity:0.85}
+
+  /* — LYRIC LINE (center bottom, floating) — */
+  .lyric{position:absolute;z-index:3;left:50%;bottom:120px;transform:translateX(-50%);color:var(--ink);font-size:22px;letter-spacing:0.06em;opacity:0;transition:opacity .6s;text-shadow:0 0 22px rgba(34,211,238,.8);text-align:center;pointer-events:none}
+  .lyric.on{opacity:0.92}
+
+  /* — BOOT OVERLAY (initial, user gesture capture) — */
+  .boot{position:fixed;inset:0;z-index:10;background:radial-gradient(ellipse at center,#001018 0,#000 70%);display:flex;align-items:center;justify-content:center}
+  .boot .panel{display:flex;flex-direction:column;align-items:center;gap:18px;padding:40px 60px;border:1px solid var(--cyan-dim);border-radius:18px;background:rgba(0,0,0,.5);backdrop-filter:blur(6px);max-width:640px}
+  .boot h1{font-size:32px;letter-spacing:0.28em;color:var(--cyan);font-weight:500;text-transform:uppercase;text-shadow:0 0 28px rgba(34,211,238,.6)}
+  .boot .sub{color:var(--ink-dim);font-size:12px;letter-spacing:0.28em;text-transform:uppercase;text-align:center}
+  .boot button{appearance:none;border:none;background:var(--lcars-a);color:#000;font:inherit;font-weight:700;font-size:16px;letter-spacing:0.22em;text-transform:uppercase;padding:16px 40px;border-radius:28px;cursor:pointer;transition:filter .15s,transform .15s}
+  .boot button:hover{filter:brightness(1.12)}
+  .boot button:active{transform:scale(0.98)}
+  .boot.hidden{display:none}
+  .boot .drop{margin-top:6px;width:100%;padding:18px 20px;border:1px dashed var(--cyan-dim);border-radius:14px;color:var(--ink-dim);font-size:11px;letter-spacing:0.22em;text-transform:uppercase;text-align:center;cursor:pointer;transition:border-color .15s,color .15s,background .15s}
+  .boot .drop:hover,.boot .drop.hot{border-color:var(--cyan);color:var(--cyan);background:rgba(34,211,238,0.06)}
+  .boot .drop b{color:var(--lcars-b);font-weight:700;letter-spacing:0.14em}
+  .boot .divider{color:var(--ink-dim);opacity:0.5;font-size:10px;letter-spacing:0.4em;padding:4px 0}
+  .boot .banner-edit{width:100%;display:flex;flex-direction:column;gap:6px;margin-top:2px}
+  .boot .banner-edit label{color:var(--ink-dim);font-size:10px;letter-spacing:0.28em;text-transform:uppercase;text-align:left}
+  .boot .banner-edit input{appearance:none;background:rgba(0,0,0,0.5);border:1px solid var(--cyan-dim);border-radius:10px;color:var(--cyan);font:inherit;font-size:14px;letter-spacing:0.14em;text-transform:uppercase;padding:10px 14px;outline:none;transition:border-color .15s}
+  .boot .banner-edit input:focus{border-color:var(--cyan)}
+
+  /* Global drop overlay — shown only while dragging over the page post-engage */
+  .dropveil{position:fixed;inset:0;z-index:20;background:rgba(0,0,0,0.55);backdrop-filter:blur(3px);display:none;align-items:center;justify-content:center;pointer-events:none}
+  .dropveil.on{display:flex}
+  .dropveil .msg{padding:36px 60px;border:2px dashed var(--cyan);border-radius:18px;color:var(--cyan);font-size:16px;letter-spacing:0.3em;text-transform:uppercase;text-shadow:0 0 22px rgba(34,211,238,0.7)}
+
+  /* — STATUS CORNER (live debug / band readout) — */
+  .status{position:absolute;z-index:3;right:10px;top:68px;font-size:10px;letter-spacing:0.1em;color:var(--ink-dim);font-family:ui-monospace,Consolas,monospace;line-height:1.7;text-align:right;pointer-events:none}
+  .status .val{color:var(--cyan)}
+
+  /* Responsiveness */
+  @media (max-width:780px){
+    body{grid-template-columns:80px 1fr;grid-template-rows:48px 1fr 68px}
+    .rail .pill{font-size:10px}
+    .rail .pill.hero{font-size:12px;height:48px}
+    .ftr{grid-template-columns:80px 1fr auto}
+    .pill{font-size:11px}
+  }
+</style>
+</head>
+<body>
+
+  <!-- Boot overlay: blocks until user gesture (required for audio) -->
+  <div class="boot" id="boot">
+    <div class="panel">
+      <h1 id="bootTitle">MOONS OF SATURN</h1>
+      <div class="sub" id="bootSub">LCARS · AUDIO VISUAL CORE · READY</div>
+      <button id="engageBtn" type="button">▶ ENGAGE</button>
+      <div class="divider">· OR ·</div>
+      <label class="drop" id="dropZone">
+        <b>DROP ANY .MP3 HERE</b> &nbsp;·&nbsp; or click to browse
+        <input type="file" id="fileInput" accept="audio/*" style="display:none">
+      </label>
+      <div class="banner-edit">
+        <label for="bannerInput">SCROLLER MESSAGE · PAINTED ON THE TUBE</label>
+        <input type="text" id="bannerInput" maxlength="64" value="EARLY AI-DOPTERS" spellcheck="false">
+      </div>
+      <div class="sub" style="font-size:10px;opacity:0.6">Custom audio runs on live FFT · reactive visual adapts to the track</div>
+    </div>
+  </div>
+
+  <!-- Drag overlay shown when user drags a file over the running visualizer -->
+  <div class="dropveil" id="dropVeil"><div class="msg">▼ DROP AUDIO TO INGEST ▼</div></div>
+
+  <!-- Stage: canvas + overlays -->
+  <div id="stage">
+    <canvas id="gl"></canvas>
+    <div class="scene-label" id="sceneLabel">INTRO · GANYMEDE SEED</div>
+    <div class="lyric" id="lyric"></div>
+    <div class="status" id="status">
+      SUB  <span class="val" id="st-sub">--.-</span><br>
+      BASS <span class="val" id="st-bass">--.-</span><br>
+      MID  <span class="val" id="st-mid">--.-</span><br>
+      AIR  <span class="val" id="st-air">--.-</span><br>
+      FPS  <span class="val" id="st-fps">--</span>
+    </div>
+  </div>
+
+  <!-- Header bar -->
+  <div class="hdr">
+    <div class="pill lead" style="min-width:180px">MOONS OF SATURN</div>
+    <div class="pill b">LCARS · AV CORE</div>
+    <div class="pill c" id="sceneTag">SCENE · 01</div>
+    <div class="pill muted grow" style="justify-content:flex-end">
+      <span>SESSION · <span id="sessDate">----</span></span>
+    </div>
+  </div>
+
+  <!-- Left rail -->
+  <div class="rail">
+    <div class="pill hero">AV CORE</div>
+    <div class="pill b btn" id="btnPlayPause">PAUSE</div>
+    <div class="pill d btn" id="btnRestart">RESTART</div>
+    <div class="pill c btn" id="btnMute">MUTE</div>
+    <div class="spacer"></div>
+    <div class="pill muted">BANDS · 4</div>
+    <div class="pill muted">FFT · 2048</div>
+    <div class="pill muted">191 KBPS</div>
+  </div>
+
+  <!-- Footer -->
+  <div class="ftr">
+    <div class="pill" style="background:var(--lcars-c);color:#000">CH · STEREO</div>
+    <div class="track">
+      <div class="t" id="tCur">0:00</div>
+      <div class="bar"><div class="fill" id="trackFill"></div></div>
+      <div class="t" id="tTot">3:13</div>
+    </div>
+    <div class="pill" style="background:var(--lcars-a);color:#000">48.0 KHZ</div>
+  </div>
+
+  <audio id="audio" src="moons-of-saturn-energy.mp3" preload="auto" crossorigin="anonymous"></audio>
+
+  <!-- Three.js via CDN import map -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.161.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.161.0/examples/jsm/"
+    }
+  }
+  </script>
+
+  <script type="module">
+    import * as THREE from 'three';
+    import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+    import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+    import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+    import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+    import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+
+    // ═══════════════════════════════════════════════════════════
+    // 1 · LOAD bands.json (pre-computed per-band envelope)
+    // ═══════════════════════════════════════════════════════════
+    let bands = null;
+    try {
+      bands = await fetch('bands.json').then(r => r.json());
+    } catch (e) {
+      console.warn('bands.json not loaded — reactive layer will run on live FFT only', e);
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // 2 · AUDIO — Web Audio graph, live analyser, envelope followers
+    // ═══════════════════════════════════════════════════════════
+    const audio = document.getElementById('audio');
+    let ac, analyser, srcNode;
+    const fftSize = 2048;
+    const freqBins = fftSize / 2;
+    const freqData = new Uint8Array(freqBins);
+    const timeData = new Uint8Array(fftSize);
+
+    // Envelope followers (smoothed, attack/release per band)
+    const env = { sub:0, bass:0, mid:0, air:0 };
+    const envTarget = { sub:0, bass:0, mid:0, air:0 };
+
+    // Transient (onset) detector — tracks slow baseline of bass, fires iKick
+    // only when current bass exceeds baseline → flash, then fast decay.
+    const detector = { bassBaseline: 0.15, midBaseline: 0.15 };
+    let laserEnv = 0;
+
+    // Camera drift — spring-damped 2D offset. Impulses fire on mid onsets
+    // (vocal/lead transients) with a cooldown so the banking is deliberate,
+    // not a shake. Spring+damper returns the camera to center between kicks.
+    const drift = { x: 0, y: 0, vx: 0, vy: 0 };
+    let lastDriftKick = -10;
+
+    function ensureAudioGraph() {
+      if (ac) return;
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      ac = new Ctx();
+      srcNode = ac.createMediaElementSource(audio);
+      analyser = ac.createAnalyser();
+      analyser.fftSize = fftSize;
+      analyser.smoothingTimeConstant = 0.2;
+      srcNode.connect(analyser);
+      analyser.connect(ac.destination);
+    }
+
+    // Map frequency (Hz) to FFT bin index given sampleRate and fftSize
+    function binAt(hz, sampleRate) {
+      return Math.max(0, Math.min(freqBins-1, Math.round(hz * fftSize / sampleRate)));
+    }
+
+    function bandEnergy(lowHz, highHz, sampleRate) {
+      const lo = binAt(lowHz, sampleRate);
+      const hi = binAt(highHz, sampleRate);
+      let sum = 0;
+      for (let i = lo; i <= hi; i++) sum += freqData[i];
+      return sum / Math.max(1, hi - lo + 1) / 255; // 0..1
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // 3 · THREE.JS SCENE — fullscreen plane with fragment shader
+    // ═══════════════════════════════════════════════════════════
+    const canvas = document.getElementById('gl');
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias:false, powerPreference:'high-performance' });
+    renderer.setPixelRatio(Math.min(2, devicePixelRatio));
+    renderer.setSize(innerWidth, innerHeight, false);
+
+    const scene = new THREE.Scene();
+    const camera = new THREE.OrthographicCamera(-1,1,1,-1,0,1);
+
+    const uniforms = {
+      iTime:        { value: 0 },
+      iResolution:  { value: new THREE.Vector2(innerWidth, innerHeight) },
+      iSub:         { value: 0 },
+      iBass:        { value: 0 },
+      iMid:         { value: 0 },
+      iAir:         { value: 0 },
+      iKick:        { value: 0 },   // transient onset (drum hit detector)
+      iDrift:       { value: new THREE.Vector2(0, 0) },  // camera bank offset
+      iText:        { value: null }, // CanvasTexture with banner text
+      iProgress:    { value: 0 }    // 0..1 through track
+    };
+
+    // ═══════════════════════════════════════════════════════════
+    // BANNER TEXT — offscreen canvas rendered once, uploaded as
+    // a wrapping texture. The tunnel shader samples it at one
+    // depth band so the text reads as painted ONTO the tube wall.
+    // ═══════════════════════════════════════════════════════════
+    function buildBannerTexture(text){
+      const w = 2048, h = 128;
+      const cvs = document.createElement('canvas');
+      cvs.width = w; cvs.height = h;
+      const ctx = cvs.getContext('2d');
+      ctx.clearRect(0, 0, w, h);
+      // Draw the text repeated with a separator, tuned to tile cleanly.
+      const repeated = (text + '  ·  ').repeat(3);
+      ctx.fillStyle = '#ffffff';
+      ctx.textBaseline = 'middle';
+      ctx.textAlign = 'left';
+      ctx.font = 'bold 72px Consolas, "Courier New", monospace';
+      ctx.fillText(repeated, 0, h/2);
+      const tex = new THREE.CanvasTexture(cvs);
+      tex.wrapS = THREE.RepeatWrapping;
+      tex.wrapT = THREE.ClampToEdgeWrapping;
+      tex.minFilter = THREE.LinearFilter;
+      tex.magFilter = THREE.LinearFilter;
+      tex.needsUpdate = true;
+      return tex;
+    }
+    uniforms.iText.value = buildBannerTexture('EARLY AI-DOPTERS');
+
+    // Shader: starfield vacuum + central pulse (scene 1 placeholder)
+    // Vertex emits vUv (0..1 across the fullscreen plane) — DPR-invariant,
+    // which is how we avoid the gl_FragCoord/iResolution DPR trap.
+    const vert = /* glsl */`
+      varying vec2 vUv;
+      void main(){ vUv = uv; gl_Position = vec4(position, 1.0); }
+    `;
+
+    const frag = /* glsl */`
+      precision highp float;
+      varying vec2 vUv;
+      uniform float iTime;
+      uniform vec2  iResolution;
+      uniform float iSub, iBass, iMid, iAir, iKick, iProgress;
+      uniform vec2  iDrift;
+      uniform sampler2D iText;
+
+      const float PI = 3.14159265;
+
+      mat2 rot2(float a){ float c=cos(a), s=sin(a); return mat2(c,-s,s,c); }
+
+      // hash noise
+      float hash21(vec2 p){ p = fract(p*vec2(234.34, 435.345)); p += dot(p, p+34.23); return fract(p.x*p.y); }
+
+      // starfield: scatter bright points in a cell grid
+      float stars(vec2 uv, float density){
+        vec2 gv = fract(uv * density) - 0.5;
+        vec2 id = floor(uv * density);
+        float n = hash21(id);
+        if (n < 0.92) return 0.0;
+        // jitter
+        vec2 off = vec2(hash21(id+1.3), hash21(id+7.1)) - 0.5;
+        float d = length(gv - off*0.6);
+        float r = 0.02 + 0.04*fract(n*91.71);
+        float twinkle = 0.5 + 0.5*sin(iTime*2.0 + n*62.83);
+        return smoothstep(r, 0.0, d) * (0.4 + 0.6*twinkle);
+      }
+
+      // nebula — soft layered noise
+      float nebula(vec2 uv){
+        float n = 0.0;
+        float a = 0.5;
+        for (int i=0;i<4;i++){
+          n += a * hash21(floor(uv*8.0)+float(i)*17.0);
+          uv *= 1.9; a *= 0.55;
+        }
+        return n;
+      }
+
+      void main(){
+        // vUv ∈ [0,1] across the plane; recentre and correct aspect.
+        vec2 uv = vUv - 0.5;
+        uv.x *= iResolution.x / iResolution.y;
+        vec2 uv0 = uv;   // WORLD-SPACE uv — pre-drift, pre-rotation. Used for
+                         // anchored distant bodies (Saturn, parallax stars)
+                         // so they don't ride the camera's bank or twist.
+
+        // ═══════════════════════════════════════════════════════
+        // CAMERA DRIFT — spring-damped 2D offset. Subtracting from uv
+        // shifts the "virtual camera" off-axis; JS handles the banking
+        // dynamics (mid-onset impulses, return-to-center spring, ambient
+        // breathing). The tunnel, seed, and everything else ride along.
+        // ═══════════════════════════════════════════════════════
+        uv -= iDrift;
+
+        // ═══════════════════════════════════════════════════════
+        // GLOBAL SWIRL — rotate screen-space before any further math.
+        // Audio-driven: mid pushes the twist, slow base drift underneath.
+        // ═══════════════════════════════════════════════════════
+        float twist = iTime*0.12 + iMid*0.5 + iAir*0.3;
+        uv = rot2(twist) * uv;
+
+        float r = length(uv);
+        float a = atan(uv.y, uv.x);   // -PI..PI
+
+        // ═══════════════════════════════════════════════════════
+        // SEED HUE — computed early so later sections (banner ring,
+        // aurora tint) can reference it. Band-reactive palette:
+        // sub→indigo, bass→cyan(ref), mid→teal, air→pale white-cyan.
+        // ═══════════════════════════════════════════════════════
+        vec3 seedCold  = vec3(0.08, 0.35, 0.95);
+        vec3 seedCyan  = vec3(0.13, 0.83, 0.93);
+        vec3 seedTeal  = vec3(0.20, 0.95, 0.70);
+        vec3 seedWhite = vec3(0.75, 0.95, 1.00);
+        vec3 seed = seedCyan;
+        seed = mix(seed, seedCold,  clamp(iSub*0.70, 0.0, 0.85));
+        seed = mix(seed, seedTeal,  clamp(iMid*0.55, 0.0, 0.70));
+        seed = mix(seed, seedWhite, clamp(iAir*0.45, 0.0, 0.60));
+
+        // background gradient — ultraviolet depths toward edges
+        vec3 col = mix(vec3(0.006, 0.02, 0.05), vec3(0.0, 0.0, 0.0), smoothstep(0.0, 1.2, r));
+
+        // ═══════════════════════════════════════════════════════
+        // SATURN ANCHOR — deep-background thematic silhouette.
+        // Off-center, faint, drifts slowly with camera bank.
+        // Rings: Y-flattened ellipse; body occludes its own ring.
+        // ═══════════════════════════════════════════════════════
+        // World-anchored: uses uv0 (pre-drift, pre-rotation), so Saturn
+        // stays put in space while the camera and tunnel move.
+        vec2 satCenter = vec2(0.68, -0.32);
+        vec2 sd = uv0 - satCenter;
+        float satR = length(sd);
+        float satBody = smoothstep(0.190, 0.165, satR);
+        float satLight = clamp(0.40 - sd.x*0.95 - sd.y*0.25, 0.0, 1.0);
+        vec3  satHue = mix(vec3(0.12, 0.08, 0.05), vec3(0.72, 0.55, 0.32), satLight);
+        col += satHue * satBody * 0.55;
+        // ring band — tilted ellipse (Y compressed reads as perspective)
+        vec2 rUV = sd; rUV.y *= 2.8;
+        float rMag = length(rUV);
+        float ringBand = smoothstep(0.46, 0.435, rMag) - smoothstep(0.335, 0.310, rMag);
+        float ringVisible = ringBand * (1.0 - satBody);
+        col += vec3(0.82, 0.70, 0.48) * ringVisible * 0.40;
+
+        // ═══════════════════════════════════════════════════════
+        // HYPERSPACE CONDUIT — the classic 1993 polar tunnel.
+        // Map (x,y) → (angle, 1/r). A uniform grid in that space
+        // reads as an infinite tube on the screen, because 1/r
+        // compresses distant rings toward the centre.
+        //   scroll.y = 1/r - bassScroll  → motion INTO depth
+        //   scroll.x = a / PI            → 32 angular segments wrap
+        // ═══════════════════════════════════════════════════════
+        float depth = 1.0/max(r, 0.001);
+        float tunnelScroll = iTime*0.55 + iBass*1.8 + iSub*1.2;
+        vec2 tunnelUV = vec2(a/PI * 0.5 + 0.5, depth*0.25 - tunnelScroll*0.1);
+
+        // grid lines in tunnel space — thin wireframe
+        vec2 gg = fract(tunnelUV * vec2(16.0, 10.0));
+        float lineA = smoothstep(0.04, 0.0, abs(gg.x - 0.5));
+        float lineD = smoothstep(0.06, 0.0, abs(gg.y - 0.5));
+        float grid  = max(lineA, lineD);
+
+        // fade tunnel near the seed (stay clean) and far out (vignette)
+        float tunnelFade = smoothstep(0.06, 0.45, r) * smoothstep(1.2, 0.35, r);
+        // WARM tube, COOL seed — complementary split.
+        // Near rings: LCARS amber. Deep rings: magenta. Bass kicks: hot pink.
+        vec3 tubeNear = vec3(1.00, 0.55, 0.10);   // amber
+        vec3 tubeFar  = vec3(0.90, 0.20, 0.55);   // magenta
+        vec3 tubeCol  = mix(tubeNear, tubeFar, clamp(depth*0.14, 0.0, 1.0));
+        tubeCol       = mix(tubeCol, vec3(1.0, 0.35, 0.70), iBass*0.55);   // kick flash
+        col += tubeCol * grid * tunnelFade * (0.55 + iMid*0.8);
+
+        // ═══════════════════════════════════════════════════════
+        // ZOOM STREAKS — per-cell rectangles. Hue now cycles by
+        // angular bin → rainbow ring. Saturation/brightness modulated
+        // by air-band so the color "shifts with parts of the music."
+        // ═══════════════════════════════════════════════════════
+        float angBin = floor(a*24.0/PI);
+        float streakRadial = hash21(vec2(angBin, floor(depth*3.0 - tunnelScroll*0.6)));
+        streakRadial = step(0.85, streakRadial);
+        float cellHue = fract(angBin / 12.0 + iTime*0.04 + iMid*0.15);
+        vec3 cellRainbow = 0.5 + 0.5 * cos(6.2832 * (cellHue + vec3(0.0, 0.33, 0.67)));
+        vec3 cellCol = mix(vec3(1.0, 0.85, 0.45), cellRainbow, 0.55 + iAir*0.4);
+        col += cellCol * streakRadial * tunnelFade * (0.25 + iAir*0.8);
+
+        // ═══════════════════════════════════════════════════════
+        // BANNER RING — scroller painted ONTO the tunnel wall.
+        // A narrow depth-band samples the CanvasTexture; text wraps
+        // around the tube angularly and scrolls with iTime. Reads
+        // as painted-on-the-wall because it respects the tunnel's
+        // 1/r depth compression — same coords as everything else.
+        // ═══════════════════════════════════════════════════════
+        float tyd = fract(tunnelUV.y);
+        float bannerBand = smoothstep(0.03, 0.0, abs(tyd - 0.5));
+        // stacked wrap: shift by time, sample the canvas horizontally
+        float banCoord = tunnelUV.x * 2.0 + iTime*0.12;   // unwrapped
+        float tx = fract(banCoord);
+        float ty = clamp((tyd - 0.45) / 0.10, 0.0, 1.0);
+        float textMask = texture2D(iText, vec2(tx, ty)).a;
+        vec3 bannerCol = mix(vec3(1.0, 0.9, 0.6), seed, 0.35);
+        col += bannerCol * textMask * bannerBand * tunnelFade * (0.9 + iBass*1.2);
+
+        // ═══════════════════════════════════════════════════════
+        // LETTER FLASH — three overlapping pickers at staggered phase.
+        // Each picks a random letter-cell, flares a random hue, fades.
+        // cellIdx is scroll-invariant (mod 120 on unwrapped coord), so
+        // a flash tracks its letter as the banner scrolls.
+        // ═══════════════════════════════════════════════════════
+        float cellIdx = mod(floor(banCoord * 120.0), 120.0);
+        for (int k = 0; k < 3; k++) {
+          float kf      = float(k);
+          float slotId  = floor(iTime * 0.9 + kf * 0.37);
+          float pickH   = hash21(vec2(slotId, 0.37 + kf * 0.19));
+          float pick    = floor(pickH * 120.0);
+          float phase   = fract(iTime * 0.9 + kf * 0.37);
+          float glowEnv = smoothstep(0.0, 0.08, phase) * (1.0 - smoothstep(0.22, 0.95, phase));
+          float match   = 1.0 - step(0.5, abs(cellIdx - pick));
+          vec3  glowTint = 0.5 + 0.5 * cos(6.2832 * (vec3(pickH, pickH + 0.33, pickH + 0.67)));
+          col += glowTint * textMask * bannerBand * tunnelFade * match * glowEnv * 4.0;
+        }
+
+        // faint nebula wash, low energy (now in post-swirl coords)
+        float neb = nebula(uv*1.3 + vec2(iTime*0.02, -iTime*0.013));
+        col += vec3(0.04, 0.10, 0.16) * pow(neb, 3.0) * 0.4;
+
+        // ═══════════════════════════════════════════════════════
+        // PARALLAX STARFIELD — three depth layers drift against
+        // iDrift at different rates. Close stars streak when the
+        // camera banks; distant ones barely move. Honest depth.
+        // ═══════════════════════════════════════════════════════
+        vec2 stFar  = uv*2.20 + vec2(2.1, 3.7) - iDrift*0.20;
+        vec2 stMid  = uv*1.00 + vec2(5.2, 1.1) - iDrift*0.55;
+        vec2 stNear = uv*0.55 + vec2(7.3, 9.8) - iDrift*1.15;
+        col += vec3(0.35, 0.50, 0.85) * stars(stFar,  140.0) * 0.30;
+        col += vec3(0.55, 0.75, 1.00) * stars(stMid,   90.0) * 0.48;
+        col += vec3(0.82, 0.92, 1.00) * stars(stNear,  55.0) * 0.65;
+
+        // ═══════════════════════════════════════════════════════
+        // GANYMEDE SEED — the heart of the conduit.
+        // (Seed hue is hoisted to the top of main() for forward-ref use.)
+        // ═══════════════════════════════════════════════════════
+        float pulse = 0.15 + iSub*0.45 + iBass*0.25;
+        float core = exp(-r*r * (36.0 - pulse*14.0)) * (0.22 + pulse*0.75);
+        col += seed * core;
+
+        // outer ring ripple, bass-driven — inherits the shifted seed hue
+        float ring = exp(-pow((r - (0.20 + iBass*0.10))*18.0, 2.0)) * (iBass*0.55);
+        col += seed * ring * 0.7;
+
+        // mid-band aurora blades — tinted toward seed, slightly muted
+        float streak = sin(a*6.0 + iTime*1.2) * 0.5 + 0.5;
+        col += mix(vec3(0.10, 0.35, 0.55), seed*0.55, iMid) * streak * iMid * 0.35 * exp(-r*1.8);
+
+        // ═══════════════════════════════════════════════════════
+        // SCANNING LASERS — 3 rotating diagonals through origin.
+        // Driven by iKick (onset-detected transient) — not raw bass.
+        // DARK on verses · FLASH on every drum hit · DECAY fast.
+        // ═══════════════════════════════════════════════════════
+        float laserWidth = iKick * 0.012;
+        float laser = 0.0;
+        for (int i=0; i<3; i++){
+          float ang = iTime*0.22 + float(i)*(PI/3.0);
+          float d = abs(-sin(ang)*uv.x + cos(ang)*uv.y);
+          laser += smoothstep(laserWidth, 0.0, d);
+        }
+        float laserFade = smoothstep(1.3, 0.2, r);
+        col += vec3(1.0, 0.35, 0.75) * laser * iKick * 1.2 * laserFade;
+
+        // ═══════════════════════════════════════════════════════
+        // CRT SCANLINES — mid-driven, subtle. Pushes the "broadcast"
+        // register so the whole thing reads as captured-on-CRT, not
+        // generated-on-4K-monitor.
+        // ═══════════════════════════════════════════════════════
+        float scan = 0.5 + 0.5*sin(vUv.y * 900.0);
+        col *= mix(1.0, 0.82 + scan*0.18, iMid*0.45);
+
+        // subtle vignette
+        col *= smoothstep(1.5, 0.2, r);
+
+        gl_FragColor = vec4(col, 1.0);
+      }
+    `;
+
+    const mat = new THREE.ShaderMaterial({ uniforms, vertexShader:vert, fragmentShader:frag });
+    const quad = new THREE.Mesh(new THREE.PlaneGeometry(2,2), mat);
+    scene.add(quad);
+
+    // Post chain
+    const composer = new EffectComposer(renderer);
+    composer.setPixelRatio(Math.min(2, devicePixelRatio));
+    composer.setSize(innerWidth, innerHeight);
+    composer.addPass(new RenderPass(scene, camera));
+
+    const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.55, 0.55, 0.28);
+    composer.addPass(bloom);
+
+    // Chromatic aberration + grain pass
+    const caShader = {
+      uniforms: {
+        tDiffuse: { value: null },
+        iTime:    { value: 0 },
+        aberration: { value: 0.0025 },
+        grain:      { value: 0.06 }
+      },
+      vertexShader: `
+        varying vec2 vUv;
+        void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }
+      `,
+      fragmentShader: `
+        precision highp float;
+        uniform sampler2D tDiffuse;
+        uniform float iTime, aberration, grain;
+        varying vec2 vUv;
+        float hash(vec2 p){ return fract(sin(dot(p, vec2(12.9898,78.233)))*43758.5453); }
+        void main(){
+          vec2 uv = vUv;
+          vec2 c = uv - 0.5;
+          float r = length(c);
+          // barrel offset scaled by radius
+          vec2 off = c * aberration * (1.0 + r*2.0);
+          float cr = texture2D(tDiffuse, uv + off).r;
+          float cg = texture2D(tDiffuse, uv       ).g;
+          float cb = texture2D(tDiffuse, uv - off).b;
+          vec3 col = vec3(cr, cg, cb);
+          // film grain — animated by time, no resolution needed
+          float n = hash(uv * 1024.0 + vec2(iTime * 37.1, iTime * 13.7)) - 0.5;
+          col += n * grain;
+          gl_FragColor = vec4(col, 1.0);
+        }
+      `
+    };
+    const caPass = new ShaderPass(caShader);
+    composer.addPass(caPass);
+    composer.addPass(new OutputPass());
+
+    // ═══════════════════════════════════════════════════════════
+    // 4 · SYNC TIMELINE — section cues (editable by ear later)
+    // ═══════════════════════════════════════════════════════════
+    const sections = [
+      { t: 0.0,   label: 'INTRO · GANYMEDE SEED' },
+      { t: 3.0,   label: 'VERSE · BEINGS OF LIGHT' },
+      { t: 90.0,  label: 'MOVEMENT · DEEP MOOG' },
+      { t: 150.0, label: 'BUILD · RISING CUTOFF' },
+      { t: 175.0, label: 'DROP · FESTIVAL ARPEGGIO' },
+      { t: 190.0, label: 'OUTRO · ULTRAVIOLET SILENCE' }
+    ];
+    function currentSection(t){
+      let s = sections[0];
+      for (const x of sections) if (x.t <= t) s = x;
+      return s;
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // 5 · UI WIRING
+    // ═══════════════════════════════════════════════════════════
+    const boot = document.getElementById('boot');
+    const engageBtn = document.getElementById('engageBtn');
+    const btnPlayPause = document.getElementById('btnPlayPause');
+    const btnRestart = document.getElementById('btnRestart');
+    const btnMute = document.getElementById('btnMute');
+    const sessDate = document.getElementById('sessDate');
+    const sceneLabel = document.getElementById('sceneLabel');
+    const sceneTag = document.getElementById('sceneTag');
+    const lyric = document.getElementById('lyric');
+    const tCur = document.getElementById('tCur');
+    const tTot = document.getElementById('tTot');
+    const trackFill = document.getElementById('trackFill');
+    const stSub = document.getElementById('st-sub');
+    const stBass = document.getElementById('st-bass');
+    const stMid = document.getElementById('st-mid');
+    const stAir = document.getElementById('st-air');
+    const stFps = document.getElementById('st-fps');
+    const bootTitle = document.getElementById('bootTitle');
+    const bootSub = document.getElementById('bootSub');
+    const dropZone = document.getElementById('dropZone');
+    const fileInput = document.getElementById('fileInput');
+    const dropVeil = document.getElementById('dropVeil');
+    const headerLead = document.querySelector('.hdr .pill.lead');
+
+    sessDate.textContent = new Date().toISOString().slice(0,10).replace(/-/g,'.');
+
+    function fmt(s){ s = Math.max(0,s|0); return Math.floor(s/60)+':'+String(s%60).padStart(2,'0'); }
+
+    engageBtn.addEventListener('click', async () => {
+      ensureAudioGraph();
+      if (ac.state === 'suspended') await ac.resume();
+      await audio.play();
+      boot.classList.add('hidden');
+      sceneLabel.classList.add('on');
+    });
+
+    // ═══════════════════════════════════════════════════════════
+    // UNIVERSAL AUDIO INGEST — file picker + global drag/drop
+    // ═══════════════════════════════════════════════════════════
+    let currentObjectURL = null;
+
+    async function ingestAudioFile(file) {
+      if (!file) return;
+      if (!file.type.startsWith('audio/') && !/\.(mp3|wav|ogg|m4a|flac|aac)$/i.test(file.name)) {
+        console.warn('File rejected — not audio:', file.name, file.type);
+        return;
+      }
+      // Swap audio source
+      if (currentObjectURL) URL.revokeObjectURL(currentObjectURL);
+      currentObjectURL = URL.createObjectURL(file);
+      audio.pause();
+      audio.removeAttribute('crossorigin');   // blob URLs are same-origin
+      audio.src = currentObjectURL;
+      audio.load();
+
+      // Custom track → drop Moons-of-Saturn-specific pre-computed layer
+      // and the hardcoded section timeline. Live FFT carries the visual.
+      bands = null;
+      sections.length = 0;
+      sections.push({ t: 0.0, label: 'CUSTOM TRACK · LIVE FFT' });
+
+      // Update labels to reflect custom track
+      const name = file.name.replace(/\.[^.]+$/, '').toUpperCase().slice(0, 48);
+      bootTitle.textContent = name || 'CUSTOM INGEST';
+      bootSub.textContent   = 'LCARS · AV CORE · AUDIO INGESTED · PRESS ENGAGE';
+      if (headerLead) headerLead.textContent = name || 'CUSTOM TRACK';
+
+      // If already past boot (user dropped mid-play), resume immediately
+      if (boot.classList.contains('hidden')) {
+        ensureAudioGraph();
+        if (ac.state === 'suspended') await ac.resume();
+        try { await audio.play(); btnPlayPause.textContent = 'PAUSE'; } catch (e) {}
+      }
+    }
+
+    dropZone.addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', (e) => { if (e.target.files[0]) ingestAudioFile(e.target.files[0]); });
+
+    // Banner text editor — swap the CanvasTexture on change, live.
+    const bannerInput = document.getElementById('bannerInput');
+    let bannerDebounce = 0;
+    function refreshBanner(){
+      const txt = (bannerInput.value || 'EARLY AI-DOPTERS').trim().toUpperCase();
+      if (uniforms.iText.value) uniforms.iText.value.dispose();
+      uniforms.iText.value = buildBannerTexture(txt);
+    }
+    bannerInput.addEventListener('input', () => {
+      clearTimeout(bannerDebounce);
+      bannerDebounce = setTimeout(refreshBanner, 180);
+    });
+    // Prevent the text-edit click from bubbling into the drop zone
+    bannerInput.addEventListener('click', (e) => e.stopPropagation());
+
+    // Boot-zone visual feedback during drag
+    ['dragenter','dragover'].forEach(evt => dropZone.addEventListener(evt, (e)=>{ e.preventDefault(); dropZone.classList.add('hot'); }));
+    ['dragleave','drop'].forEach(evt => dropZone.addEventListener(evt, ()=> dropZone.classList.remove('hot')));
+
+    // Global window-level drag&drop (works pre- AND post-engage)
+    let dragDepth = 0;
+    window.addEventListener('dragenter', (e) => {
+      if (!e.dataTransfer || !e.dataTransfer.types.includes('Files')) return;
+      dragDepth++;
+      if (boot.classList.contains('hidden')) dropVeil.classList.add('on');
+    });
+    window.addEventListener('dragleave', () => {
+      dragDepth = Math.max(0, dragDepth - 1);
+      if (dragDepth === 0) dropVeil.classList.remove('on');
+    });
+    window.addEventListener('dragover', (e) => { e.preventDefault(); });
+    window.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      dragDepth = 0;
+      dropVeil.classList.remove('on');
+      const file = e.dataTransfer?.files?.[0];
+      if (file) await ingestAudioFile(file);
+    });
+
+    btnPlayPause.addEventListener('click', async () => {
+      if (!ac) return;
+      if (audio.paused) { await audio.play(); btnPlayPause.textContent='PAUSE'; }
+      else { audio.pause(); btnPlayPause.textContent='PLAY'; }
+    });
+    btnRestart.addEventListener('click', async () => {
+      try { audio.currentTime = 0; } catch (e) {}
+      if (ac && ac.state === 'suspended') await ac.resume();
+      if (audio.paused || audio.ended) {
+        try { await audio.play(); btnPlayPause.textContent = 'PAUSE'; } catch (e) {}
+      }
+    });
+    btnMute.addEventListener('click', () => {
+      audio.muted = !audio.muted;
+      btnMute.textContent = audio.muted ? 'UNMUTE' : 'MUTE';
+      btnMute.classList.toggle('active', audio.muted);
+    });
+
+    audio.addEventListener('loadedmetadata', () => { tTot.textContent = fmt(audio.duration); });
+
+    addEventListener('resize', () => {
+      renderer.setSize(innerWidth, innerHeight, false);
+      composer.setSize(innerWidth, innerHeight);
+      uniforms.iResolution.value.set(innerWidth, innerHeight);
+    });
+
+    // ═══════════════════════════════════════════════════════════
+    // 6 · RENDER LOOP — reactive envelope → shader uniforms
+    // ═══════════════════════════════════════════════════════════
+    let last = performance.now();
+    let fps = 60, fpsAccum = 0, fpsFrames = 0;
+    let lastSectionT = -1;
+
+    function tick(now){
+      const dt = Math.min(0.05, (now - last)/1000);
+      last = now;
+
+      const t = audio.currentTime || 0;
+      const dur = audio.duration || 193.8;
+
+      // Pull live FFT if running
+      let liveSub=0, liveBass=0, liveMid=0, liveAir=0;
+      if (analyser) {
+        const sr = ac.sampleRate;
+        analyser.getByteFrequencyData(freqData);
+        liveSub  = bandEnergy(20,    80,   sr);
+        liveBass = bandEnergy(80,    250,  sr);
+        liveMid  = bandEnergy(250,   4000, sr);
+        liveAir  = bandEnergy(4000, 16000, sr);
+      }
+
+      // Pre-computed band value at current t (dB → 0..1)
+      // Window kept moderately wide so the motion-feel the user validated stays intact.
+      function dbTo01(db, floor=-50, ceil=-18){ return Math.max(0, Math.min(1, (db - floor)/(ceil - floor))); }
+      let preSub=0, preBass=0, preMid=0, preAir=0;
+      if (bands && bands.bands) {
+        const i = Math.min(bands.n_samples-1, Math.floor(t / (bands.sample_interval_ms/1000)));
+        preSub  = dbTo01(bands.bands.sub[i]);
+        preBass = dbTo01(bands.bands.bass[i]);
+        preMid  = dbTo01(bands.bands.mid[i]);
+        preAir  = dbTo01(bands.bands.air[i]);
+      }
+
+      // Blend live + pre-computed (live for reactivity, pre for consistency)
+      envTarget.sub  = Math.max(liveSub,  preSub);
+      envTarget.bass = Math.max(liveBass, preBass);
+      envTarget.mid  = Math.max(liveMid,  preMid);
+      envTarget.air  = Math.max(liveAir,  preAir);
+
+      // Envelope follower: fast attack, slower release
+      for (const k of ['sub','bass','mid','air']) {
+        const rate = envTarget[k] > env[k] ? 18 : 4; // per-second
+        env[k] += (envTarget[k] - env[k]) * Math.min(1, rate*dt);
+      }
+
+      // ─── ONSET DETECTOR (for laser transients) ────────────
+      // slow baseline follows average bass (~0.8s time constant)
+      detector.bassBaseline += (env.bass - detector.bassBaseline) * Math.min(1, 1.2*dt);
+      // onset = how much current bass exceeds its baseline
+      const onset = Math.max(0, env.bass - detector.bassBaseline - 0.06);
+      const kickTarget = Math.min(1, onset * 3.5);
+      // snap attack, ~0.33s decay
+      if (kickTarget > laserEnv) laserEnv = kickTarget;
+      else laserEnv *= Math.exp(-3.2 * dt);
+
+      // ─── CAMERA DRIFT (mid-onset spring impulses) ─────────
+      detector.midBaseline += (env.mid - detector.midBaseline) * Math.min(1, 1.0*dt);
+      const midOnsetRaw = env.mid - detector.midBaseline - 0.08;
+      const nowT = uniforms.iTime.value;
+      if (midOnsetRaw > 0.18 && nowT - lastDriftKick > 0.8) {
+        lastDriftKick = nowT;
+        const ang = Math.random() * Math.PI * 2;
+        const mag = 0.09 + Math.min(0.06, midOnsetRaw * 0.3);
+        drift.vx += Math.cos(ang) * mag;
+        drift.vy += Math.sin(ang) * mag;
+      }
+      // spring dynamics: F = -k·x − c·v  (critically damped, fast return)
+      const kSpring = 9.0, cDamp = 4.5;
+      drift.vx += (-kSpring * drift.x - cDamp * drift.vx) * dt;
+      drift.vy += (-kSpring * drift.y - cDamp * drift.vy) * dt;
+      drift.x += drift.vx * dt;
+      drift.y += drift.vy * dt;
+      // ambient slow breathing — always a tiny bit of drift even on silent verses
+      const ambX = Math.sin(nowT * 0.13) * 0.014;
+      const ambY = Math.cos(nowT * 0.19) * 0.014;
+      uniforms.iDrift.value.set(drift.x + ambX, drift.y + ambY);
+
+      uniforms.iTime.value += dt;
+      caPass.uniforms.iTime.value = uniforms.iTime.value;
+      uniforms.iSub.value  = env.sub;
+      uniforms.iBass.value = env.bass;
+      uniforms.iMid.value  = env.mid;
+      uniforms.iAir.value  = env.air;
+      uniforms.iKick.value = laserEnv;
+      uniforms.iProgress.value = dur ? t/dur : 0;
+
+      // Section label update
+      const cur = currentSection(t);
+      if (cur.t !== lastSectionT) {
+        lastSectionT = cur.t;
+        sceneLabel.textContent = cur.label;
+        const idx = sections.indexOf(cur) + 1;
+        sceneTag.textContent = 'SCENE · ' + String(idx).padStart(2,'0');
+      }
+
+      // UI readouts
+      tCur.textContent = fmt(t);
+      trackFill.style.width = (uniforms.iProgress.value*100).toFixed(1) + '%';
+      stSub.textContent  = env.sub.toFixed(2);
+      stBass.textContent = env.bass.toFixed(2);
+      stMid.textContent  = env.mid.toFixed(2);
+      stAir.textContent  = env.air.toFixed(2);
+
+      // FPS meter (EMA)
+      fpsFrames++; fpsAccum += dt;
+      if (fpsAccum >= 0.5) { fps = fpsFrames/fpsAccum; fpsAccum = 0; fpsFrames = 0; stFps.textContent = fps.toFixed(0); }
+
+      composer.render();
+      requestAnimationFrame(tick);
+    }
+    requestAnimationFrame(tick);
+  </script>
+</body>
+</html>
