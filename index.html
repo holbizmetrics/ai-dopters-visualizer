@@ -7,7 +7,7 @@
 <meta name="mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-<title>MOONS OF SATURN · LCARS DEMO</title>
+<title>EARLY AI-DOPTERS · AV CORE</title>
 <style>
   /* ═══════════════════════════════════════════════════════════════
      LCARS CHROME — Trek computer skin wrapping a demoscene canvas.
@@ -79,6 +79,18 @@
   .boot button{appearance:none;border:none;background:var(--lcars-a);color:#000;font:inherit;font-weight:700;font-size:16px;letter-spacing:0.22em;text-transform:uppercase;padding:16px 40px;border-radius:28px;cursor:pointer;transition:filter .15s,transform .15s}
   .boot button:hover{filter:brightness(1.12)}
   .boot button:active{transform:scale(0.98)}
+  .boot button:disabled{cursor:not-allowed;filter:grayscale(0.6) brightness(0.65);transform:none}
+  .track-menu{display:flex;flex-direction:column;gap:8px;width:100%;margin-top:2px}
+  .track-menu .track-item{appearance:none;border:1px solid var(--cyan-dim);background:rgba(0,0,0,0.4);color:var(--cyan);font:inherit;font-weight:600;font-size:14px;letter-spacing:0.18em;text-transform:uppercase;padding:14px 22px;border-radius:18px;cursor:pointer;text-align:left;display:flex;align-items:center;gap:14px;transition:border-color .15s,background .15s,color .15s,transform .15s}
+  .track-menu .track-item:hover:not(:disabled){border-color:var(--cyan);background:rgba(34,211,238,0.08);color:#fff}
+  .track-menu .track-item:active:not(:disabled){transform:scale(0.99)}
+  .track-menu .track-item:disabled{cursor:not-allowed;border-color:rgba(123,163,184,0.25);background:rgba(0,0,0,0.25)}
+  .track-menu .track-item:disabled .glyph{color:var(--lcars-e)}
+  .track-menu .track-item:disabled .title{color:var(--ink-dim)}
+  .track-menu .track-item .glyph{color:var(--lcars-a);font-size:16px;min-width:16px;text-align:center}
+  .track-menu .track-item .title{flex:1;font-weight:700;letter-spacing:0.22em}
+  .track-menu .track-item .artist{font-size:10px;letter-spacing:0.26em;color:var(--ink-dim);font-weight:500}
+  .track-menu .track-item .status-tag{font-size:9px;letter-spacing:0.24em;color:var(--lcars-e);border:1px solid var(--lcars-e);padding:3px 8px;border-radius:10px;font-weight:700;white-space:nowrap}
   .boot.hidden{display:none}
   .boot .drop{margin-top:6px;width:100%;padding:18px 20px;border:1px dashed var(--cyan-dim);border-radius:14px;color:var(--ink-dim);font-size:11px;letter-spacing:0.22em;text-transform:uppercase;text-align:center;cursor:pointer;transition:border-color .15s,color .15s,background .15s}
   .boot .drop:hover,.boot .drop.hot{border-color:var(--cyan);color:var(--cyan);background:rgba(34,211,238,0.06)}
@@ -139,10 +151,10 @@
   <!-- Boot overlay: blocks until user gesture (required for audio) -->
   <div class="boot" id="boot">
     <div class="panel">
-      <h1 id="bootTitle">MOONS OF SATURN</h1>
-      <div class="sub" id="bootSub">LCARS · AUDIO VISUAL CORE · READY</div>
-      <button id="engageBtn" type="button">▶ ENGAGE</button>
-      <div class="divider">· OR ·</div>
+      <h1 id="bootTitle">EARLY AI-DOPTERS</h1>
+      <div class="sub" id="bootSub">LCARS · AUDIO VISUAL CORE · SELECT A TRACK</div>
+      <div class="track-menu" id="trackMenu"></div>
+      <div class="divider">· OR DROP YOUR OWN ·</div>
       <label class="drop" id="dropZone">
         <b>DROP ANY .MP3 HERE</b> &nbsp;·&nbsp; or click to browse
         <input type="file" id="fileInput" accept="audio/*" style="display:none">
@@ -212,7 +224,7 @@
   <!-- No `crossorigin` on the bundled source: on same-origin hosts (GitHub Pages, a local static
        server, file://) it's unnecessary, and it silently broke ENGAGE on some configs yesterday.
        `playsinline` keeps iOS/Android from hijacking playback into full-screen. -->
-  <audio id="audio" src="moons-of-saturn-energy.mp3" preload="auto" playsinline></audio>
+  <audio id="audio" preload="auto" playsinline></audio>
 
   <!-- Three.js via CDN import map -->
   <script type="importmap">
@@ -312,6 +324,14 @@
         this.dispatchEvent(new CustomEvent('engaged'));
       }
 
+      // Point the <audio> element at a same-origin bundled track. engage()
+      // handles the load wait via its readyState check, so this is a pure
+      // src swap. Safe to call before or after engage.
+      setBundledSource(src) {
+        if (this.el.src && this.el.src.endsWith(src)) return;  // no-op on same src
+        this.el.src = src;
+      }
+
       async ingestFile(file) {
         if (!file) return null;
         if (!file.type.startsWith('audio/') && !/\.(mp3|wav|ogg|m4a|flac|aac)$/i.test(file.name)) return null;
@@ -358,7 +378,18 @@
       }
     }
 
+    // Bundled track catalogue. Each entry becomes a clickable pill in the
+    // boot menu. Extend this array to offer more tracks — UI picks up new
+    // entries automatically. `src` is resolved relative to index.html.
+    const TRACKS = [
+      { title: 'THE MOONS OF SATURN · ENERGY', artist: 'SUNO · AI-GENERATED', src: 'moons-of-saturn-energy.mp3' },
+    ];
+
     const audioSource = new AudioSource(document.getElementById('audio'));
+    // Pre-point the <audio> element at the first bundled track so preload
+    // can start before the user clicks. If they pick a different entry the
+    // click handler swaps src.
+    if (TRACKS.length) audioSource.setBundledSource(TRACKS[0].src);
 
     // ═══════════════════════════════════════════════════════════
     // 3 · SHADERS — vert/frag strings + caShader post-pass
@@ -812,14 +843,15 @@
     //         and 'banner' events for cross-cutting concerns
     // ═══════════════════════════════════════════════════════════
     class UI extends EventTarget {
-      constructor(audioSource) {
+      constructor(audioSource, tracks) {
         super();
         this.audio = audioSource;
+        this.tracks = tracks || [];
         // Boot overlay
         this.boot        = document.getElementById('boot');
         this.bootTitle   = document.getElementById('bootTitle');
         this.bootSub     = document.getElementById('bootSub');
-        this.engageBtn   = document.getElementById('engageBtn');
+        this.trackMenu   = document.getElementById('trackMenu');
         this.dropZone    = document.getElementById('dropZone');
         this.fileInput   = document.getElementById('fileInput');
         this.bannerInput = document.getElementById('bannerInput');
@@ -846,13 +878,32 @@
         this._dragDepth = 0;
 
         this.sessDate.textContent = new Date().toISOString().slice(0,10).replace(/-/g,'.');
+        this._renderTrackMenu();
         this._applyFileGate();
         this._wireAudioEvents();
-        this._wireEngage();
+        this._wireTrackMenu();
         this._wireIngest();
         this._wireBanner();
         this._wirePlayback();
         this._wireVolume();
+      }
+
+      // Build a clickable pill per bundled track. Each pill shares the
+      // same "engage this source" handler — wired in _wireTrackMenu.
+      _renderTrackMenu() {
+        this.trackMenu.innerHTML = '';
+        for (const track of this.tracks) {
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'track-item';
+          btn.dataset.src = track.src;
+          btn.innerHTML = `
+            <span class="glyph">▶</span>
+            <span class="title">${track.title}</span>
+            <span class="artist">${track.artist || ''}</span>
+          `;
+          this.trackMenu.appendChild(btn);
+        }
       }
 
       _fmt(s){ s = Math.max(0, s|0); return Math.floor(s/60)+':'+String(s%60).padStart(2,'0'); }
@@ -860,15 +911,29 @@
       // file:// trap — Chrome treats every file:// file as its own origin, so routing
       // the bundled mp3 through createMediaElementSource mutes the graph (cross-origin
       // taint). Worse: the taint sticks once the graph is wired, so engaging on the
-      // bundled track poisons any later drop too. Fix: on file://, disable ENGAGE
-      // until a file is dropped — the dropped blob URL is same-origin, graph wires
-      // clean, full audio + reactivity. HTTP serving is unaffected.
+      // bundled track poisons any later drop too. Fix: on file://, disable all bundled
+      // track pills until a file is dropped — the dropped blob URL is same-origin,
+      // graph wires clean, full audio + reactivity. HTTP serving is unaffected.
       _applyFileGate() {
         if (location.protocol !== 'file:') return;
-        this.bootSub.textContent = 'FILE:// — DROP ANY MP3 TO ENGAGE · OR SERVE VIA HTTP FOR BUNDLED TRACK';
+        this.bootSub.textContent = 'FILE:// — DROP ANY MP3 TO ENGAGE · OR SERVE VIA HTTP FOR BUNDLED TRACKS';
         this.bootSub.style.color = 'var(--lcars-e)';
-        this.engageBtn.disabled = true;
-        this.engageBtn.textContent = '▶ ENGAGE · DROP A SONG FIRST';
+        for (const btn of this.trackMenu.querySelectorAll('.track-item')) {
+          btn.disabled = true;
+          btn.title = 'Bundled playback disabled on file:// — drop any MP3, or serve over HTTP';
+          // Swap ▶ → 🔒 (as a glyph, not an emoji — stays on LCARS palette)
+          const glyph = btn.querySelector('.glyph');
+          if (glyph) glyph.textContent = '⬢';
+          // Replace the artist meta with an amber "HTTP ONLY" tag so the
+          // pill reads as gated, not broken.
+          const artist = btn.querySelector('.artist');
+          if (artist) {
+            const tag = document.createElement('span');
+            tag.className = 'status-tag';
+            tag.textContent = 'HTTP ONLY';
+            artist.replaceWith(tag);
+          }
+        }
       }
 
       _wireAudioEvents() {
@@ -895,23 +960,41 @@
         });
       }
 
-      _wireEngage() {
-        this.engageBtn.addEventListener('click', async () => {
-          this.engageBtn.disabled = true;
-          const prevLabel = this.engageBtn.textContent;
-          this.engageBtn.textContent = '· · · ENGAGING · · ·';
-          try {
-            await this.audio.engage();
-            this.boot.classList.add('hidden');
-            this.sceneLabel.classList.add('on');
-          } catch (err) {
-            console.warn('ENGAGE failed:', err);
-            this.bootSub.textContent = 'ENGAGE FAILED — TAP ▼ TO DROP AN MP3';
-            this.bootSub.style.color = 'var(--lcars-e)';
-            this.engageBtn.textContent = prevLabel;
-            this.engageBtn.disabled = false;
-          }
-        });
+      // Wire one click handler per track pill. Click = point AudioSource
+      // at that track's src and engage. The drop path is the same idea but
+      // fires from _ingestFile.
+      _wireTrackMenu() {
+        for (const btn of this.trackMenu.querySelectorAll('.track-item')) {
+          btn.addEventListener('click', async () => {
+            if (btn.disabled) return;
+            // Visually mark the in-flight selection
+            const prevHtml = btn.innerHTML;
+            btn.disabled = true;
+            btn.innerHTML = '<span class="glyph">·</span><span class="title">· · · ENGAGING · · ·</span>';
+            // Disable sibling pills so only one track can be in flight
+            for (const other of this.trackMenu.querySelectorAll('.track-item')) {
+              if (other !== btn) other.disabled = true;
+            }
+            try {
+              // Update lead text so the header matches the selected track
+              const title = btn.querySelector('.title').textContent;
+              if (this.headerLead) this.headerLead.textContent = title;
+              this.audio.setBundledSource(btn.dataset.src);
+              await this.audio.engage();
+              this.boot.classList.add('hidden');
+              this.sceneLabel.classList.add('on');
+            } catch (err) {
+              console.warn('ENGAGE failed:', err);
+              this.bootSub.textContent = 'ENGAGE FAILED — DROP AN MP3 INSTEAD';
+              this.bootSub.style.color = 'var(--lcars-e)';
+              btn.innerHTML = prevHtml;
+              btn.disabled = false;
+              for (const other of this.trackMenu.querySelectorAll('.track-item')) {
+                if (location.protocol !== 'file:') other.disabled = false;
+              }
+            }
+          });
+        }
       }
 
       async _ingestFile(file) {
@@ -922,16 +1005,21 @@
         }
         // Update labels to reflect custom track (and clear any prior error state)
         this.bootTitle.textContent = meta.name || 'CUSTOM INGEST';
-        this.bootSub.textContent   = 'LCARS · AV CORE · AUDIO INGESTED · PRESS ENGAGE';
+        this.bootSub.textContent   = 'LCARS · AV CORE · AUDIO INGESTED · ENGAGING';
         this.bootSub.style.color   = '';
-        this.engageBtn.disabled    = false;
-        this.engageBtn.textContent = '▶ ENGAGE';
         if (this.headerLead) this.headerLead.textContent = meta.name || 'CUSTOM TRACK';
         // Fan out — SceneTimeline (or current sections[] owner) clears on this event.
         this.dispatchEvent(new CustomEvent('customtrack', { detail: meta }));
-        // If already past boot (user dropped mid-play), resume immediately
-        if (this.boot.classList.contains('hidden')) {
-          try { await this.audio.engage(); this.btnPlayPause.textContent = 'PAUSE'; } catch (e) {}
+        // Drop IS a user gesture — autoplay is unlocked, so engage immediately
+        // whether we're pre-boot or mid-flight. Collapses the old two-step
+        // "drop → press ENGAGE" dance into one action.
+        try {
+          await this.audio.engage();
+          this.boot.classList.add('hidden');
+          this.sceneLabel.classList.add('on');
+          this.btnPlayPause.textContent = 'PAUSE';
+        } catch (e) {
+          console.warn('auto-engage after drop failed:', e);
         }
       }
 
@@ -1035,7 +1123,7 @@
       }
     }
 
-    const ui = new UI(audioSource);
+    const ui = new UI(audioSource, TRACKS);
 
     // ═══════════════════════════════════════════════════════════
     // 6 · VISUALIZER — owns sim state + gfx handles + renderFrame.
