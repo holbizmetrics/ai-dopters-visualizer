@@ -133,6 +133,11 @@
     .hdr .pill{padding:0 10px}
   }
 </style>
+  <!-- Pre-computed band data exposed as window.__BANDS__. Loaded as a classic
+       script (not fetch) so file:// origins still get it — Chrome blocks
+       cross-file fetch() but classic scripts work. HTTP serving works either
+       way; this is the reliable path. -->
+  <script src="bands.js"></script>
 </head>
 <body>
 
@@ -235,11 +240,15 @@
     // ═══════════════════════════════════════════════════════════
     // 1 · LOAD bands.json (pre-computed per-band envelope)
     // ═══════════════════════════════════════════════════════════
-    let bands = null;
-    try {
-      bands = await fetch('bands.json').then(r => r.json());
-    } catch (e) {
-      console.warn('bands.json not loaded — reactive layer will run on live FFT only', e);
+    // Bands come in via two paths: window.__BANDS__ (classic script, reliable on
+    // file://) OR fetch('bands.json') (fallback). Whichever arrives first wins.
+    let bands = window.__BANDS__ || null;
+    if (!bands) {
+      try {
+        bands = await fetch('bands.json').then(r => r.json());
+      } catch (e) {
+        console.warn('bands.json not loaded — reactive layer will run on live FFT only', e);
+      }
     }
 
     // ═══════════════════════════════════════════════════════════
@@ -267,11 +276,28 @@
     const drift = { x: 0, y: 0, vx: 0, vy: 0 };
     let lastDriftKick = -10;
 
+    // `srcNode` is created lazily. On file:// with the bundled mp3 we deliberately
+    // skip MediaElementSource creation — Chrome treats every file:// file as its own
+    // origin, so `createMediaElementSource(audio)` taints and produces silent output.
+    // Skipping it lets the <audio> element play through its own default output (which
+    // works fine on file://) while the visual runs on pre-computed bands. Once the
+    // user drops a file, the blob: URL is same-origin to the page, so we wire up the
+    // real WebAudio graph then and live FFT comes back.
     function ensureAudioGraph() {
-      if (ac) return;
-      const Ctx = window.AudioContext || window.webkitAudioContext;
-      ac = new Ctx();
-      srcNode = ac.createMediaElementSource(audio);
+      if (!ac) {
+        const Ctx = window.AudioContext || window.webkitAudioContext;
+        ac = new Ctx();
+      }
+      if (srcNode) return; // already wired — createMediaElementSource can only run once per element
+      const unsafeSrc = location.protocol === 'file:'
+                       && audio.src
+                       && !audio.src.startsWith('blob:');
+      if (unsafeSrc) {
+        // bypass mode — audio element plays directly, no analyser
+        analyser = null;
+        return;
+      }
+      srcNode  = ac.createMediaElementSource(audio);
       analyser = ac.createAnalyser();
       analyser.fftSize = fftSize;
       analyser.smoothingTimeConstant = 0.2;
@@ -791,13 +817,13 @@
 
     sessDate.textContent = new Date().toISOString().slice(0,10).replace(/-/g,'.');
 
-    // file:// trap — Chrome mutes MediaElementSource output for cross-origin media, and every
-    // file:// file is its own origin. Result: ENGAGE on the bundled track gives silent playback
-    // (UI runs, currentTime advances, no sound). Dropped files work because blob: URLs are
-    // same-origin to this page. Warn proactively so this isn't a silent dead-end.
+    // file:// note — Chrome treats every file:// file as its own origin, so we bypass
+    // MediaElementSource for the bundled track (see ensureAudioGraph). Audio plays
+    // through the <audio> element directly; live FFT is disabled for the bundled track
+    // only (pre-computed bands drive the visual). Dropped files wire up the full graph.
     if (location.protocol === 'file:') {
-      bootSub.textContent = 'FILE:// — BUNDLED TRACK WILL BE SILENT · DROP AN MP3 OR SERVE VIA HTTP';
-      bootSub.style.color = 'var(--lcars-e)';
+      bootSub.textContent = 'FILE:// — LIVE FFT OFF · BUNDLED VISUAL RUNS ON PRE-COMPUTED BANDS';
+      bootSub.style.color = 'var(--lcars-b)';
     }
 
     function fmt(s){ s = Math.max(0,s|0); return Math.floor(s/60)+':'+String(s%60).padStart(2,'0'); }
