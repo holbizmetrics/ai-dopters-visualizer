@@ -133,11 +133,6 @@
     .hdr .pill{padding:0 10px}
   }
 </style>
-  <!-- Pre-computed band data exposed as window.__BANDS__. Loaded as a classic
-       script (not fetch) so file:// origins still get it — Chrome blocks
-       cross-file fetch() but classic scripts work. HTTP serving works either
-       way; this is the reliable path. -->
-  <script src="bands.js"></script>
 </head>
 <body>
 
@@ -238,21 +233,7 @@
     import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 
     // ═══════════════════════════════════════════════════════════
-    // 1 · LOAD bands.json (pre-computed per-band envelope)
-    // ═══════════════════════════════════════════════════════════
-    // Bands come in via two paths: window.__BANDS__ (classic script, reliable on
-    // file://) OR fetch('bands.json') (fallback). Whichever arrives first wins.
-    let bands = window.__BANDS__ || null;
-    if (!bands) {
-      try {
-        bands = await fetch('bands.json').then(r => r.json());
-      } catch (e) {
-        console.warn('bands.json not loaded — reactive layer will run on live FFT only', e);
-      }
-    }
-
-    // ═══════════════════════════════════════════════════════════
-    // 2 · AUDIO — Web Audio graph, live analyser, envelope followers
+    // 1 · AUDIO — Web Audio graph, live analyser, envelope followers
     // ═══════════════════════════════════════════════════════════
     const audio = document.getElementById('audio');
     let ac, analyser, srcNode;
@@ -819,10 +800,10 @@
 
     // file:// note — Chrome treats every file:// file as its own origin, so we bypass
     // MediaElementSource for the bundled track (see ensureAudioGraph). Audio plays
-    // through the <audio> element directly; live FFT is disabled for the bundled track
-    // only (pre-computed bands drive the visual). Dropped files wire up the full graph.
+    // through the <audio> element directly; the visual will be flat on the bundled
+    // track only. Drop any MP3 or serve via HTTP for the full reactive experience.
     if (location.protocol === 'file:') {
-      bootSub.textContent = 'FILE:// — LIVE FFT OFF · BUNDLED VISUAL RUNS ON PRE-COMPUTED BANDS';
+      bootSub.textContent = 'FILE:// — BUNDLED VISUAL IS FLAT · DROP ANY MP3 FOR FULL REACTIVITY';
       bootSub.style.color = 'var(--lcars-b)';
     }
 
@@ -955,9 +936,15 @@
 
     btnPlayPause.addEventListener('click', async () => {
       if (!ac) return;
+      // After the track ends, audio.paused is true — native play() would restart
+      // from 0, which feels wrong. Ignore; user must hit RESTART explicitly.
+      if (audio.ended) return;
       if (audio.paused) { await audio.play(); btnPlayPause.textContent='PAUSE'; }
       else { audio.pause(); btnPlayPause.textContent='PLAY'; }
     });
+    // Reflect end-of-track in the button so it's clearly non-interactive.
+    audio.addEventListener('ended', () => { btnPlayPause.textContent = 'ENDED'; });
+    audio.addEventListener('play',  () => { btnPlayPause.textContent = 'PAUSE'; });
     btnRestart.addEventListener('click', async () => {
       try { audio.currentTime = 0; } catch (e) {}
       if (ac && ac.state === 'suspended') await ac.resume();
@@ -1011,34 +998,19 @@
       const t = audio.currentTime || 0;
       const dur = audio.duration || 193.8;
 
-      // Pull live FFT if running
-      let liveSub=0, liveBass=0, liveMid=0, liveAir=0;
+      // Live FFT → band energies. When analyser is absent (file:// bundled-track
+      // bypass) everything stays at zero — visual runs flat with only ambient
+      // breath. Drop any MP3 to get the full reactive experience.
       if (analyser) {
         const sr = ac.sampleRate;
         analyser.getByteFrequencyData(freqData);
-        liveSub  = bandEnergy(20,    80,   sr);
-        liveBass = bandEnergy(80,    250,  sr);
-        liveMid  = bandEnergy(250,   4000, sr);
-        liveAir  = bandEnergy(4000, 16000, sr);
+        envTarget.sub  = bandEnergy(20,    80,   sr);
+        envTarget.bass = bandEnergy(80,    250,  sr);
+        envTarget.mid  = bandEnergy(250,   4000, sr);
+        envTarget.air  = bandEnergy(4000, 16000, sr);
+      } else {
+        envTarget.sub = envTarget.bass = envTarget.mid = envTarget.air = 0;
       }
-
-      // Pre-computed band value at current t (dB → 0..1)
-      // Window kept moderately wide so the motion-feel the user validated stays intact.
-      function dbTo01(db, floor=-50, ceil=-18){ return Math.max(0, Math.min(1, (db - floor)/(ceil - floor))); }
-      let preSub=0, preBass=0, preMid=0, preAir=0;
-      if (bands && bands.bands) {
-        const i = Math.min(bands.n_samples-1, Math.floor(t / (bands.sample_interval_ms/1000)));
-        preSub  = dbTo01(bands.bands.sub[i]);
-        preBass = dbTo01(bands.bands.bass[i]);
-        preMid  = dbTo01(bands.bands.mid[i]);
-        preAir  = dbTo01(bands.bands.air[i]);
-      }
-
-      // Blend live + pre-computed (live for reactivity, pre for consistency)
-      envTarget.sub  = Math.max(liveSub,  preSub);
-      envTarget.bass = Math.max(liveBass, preBass);
-      envTarget.mid  = Math.max(liveMid,  preMid);
-      envTarget.air  = Math.max(liveAir,  preAir);
 
       // Envelope follower: fast attack, slower release
       for (const k of ['sub','bass','mid','air']) {

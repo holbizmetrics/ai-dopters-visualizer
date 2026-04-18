@@ -27,14 +27,17 @@ Live: `index.html` — open it in a modern browser, no build step, no server req
 
 One HTML file. Everything is inline.
 
-- **Audio graph**: `<audio>` → `MediaElementSource` → `AnalyserNode` (+ splitter to destination). The analyser supplies an 2048-bin FFT every frame.
+- **Audio graph**: `<audio>` → `MediaElementSource` → `AnalyserNode` (+ splitter to destination). The analyser supplies an 2048-bin FFT every frame. On `file://` with the bundled track, Chrome treats every file as its own origin and silently mutes `MediaElementSource`; to keep audio audible we bypass the WebAudio graph on that path (audio plays through the `<audio>` element directly, visual runs flat). Drop any MP3 to get the full reactive graph.
 - **Band split**: SUB (20–80 Hz), BASS (80–250 Hz), MID (250–4 kHz), AIR (4–16 kHz). Each runs through an envelope follower (fast attack, slow release).
-- **Pre-computed bands** (`bands.json`): for the bundled track only, we also read offline-computed band levels and `max()` them with live FFT. This keeps the visual consistent on quieter system volume and adds a track-specific motion-feel. Custom tracks skip this and run on live FFT alone.
 - **Onset detector**: bass-over-baseline lifts a `kick` envelope that drives the laser transients.
 - **Camera drift**: mid-band onsets kick a critically-damped spring, so every strong mid transient nudges the tunnel off-axis and springs back.
 - **Shader**: single GLSL fragment shader renders a polar tunnel (`depth = 1/r`, `a = atan2(uv.y, uv.x)`), composites tunnel cells, rainbow wobble, signal-pulse sweeps, TRON tracer bits, TRON octahedron glyphs, a text banner CanvasTexture mapped onto a depth band, the central "GANYMEDE SEED" gaussian, lasers, stars, and a starfield-drift background.
 - **Post-processing**: UnrealBloomPass (0.50 / 0.42 / 0.35) → chromatic-aberration + grain ShaderPass → OutputPass.
 - **Scene timeline** (bundled track only): six scene labels timed to the original track (INTRO → VERSE → MOVEMENT → BUILD → DROP → OUTRO). The SCENE pill in the header auto-updates. Custom tracks collapse to a single `CUSTOM TRACK · LIVE FFT` label.
+
+### Why bundled+`file://` has a flat visual
+
+Opening `index.html` directly (double-click) runs it from the `file://` origin. Chrome treats every file there as its own origin, so piping the bundled `.mp3` through `createMediaElementSource` would mute the output (cross-origin taint on the audio graph). We detect that case and bypass the WebAudio graph — audio plays, but there's no live FFT so the visual has no drive source. Two fixes: (1) drop any MP3 onto the page (blob URLs are same-origin, graph works), or (2) serve over HTTP (`python -m http.server`). The hosted GitHub Pages build has no such limitation.
 
 ---
 
@@ -72,7 +75,6 @@ Serving the page from a local network is easiest: `python -m http.server 8000 --
 ```
 index.html                    Everything. Three.js via CDN import-map.
 moons-of-saturn-energy.mp3    The bundled track.
-bands.json                    Offline band analysis for the bundled track.
 cover.jpg                     Cover art (not used at runtime; source material).
 analysis/                     Notes and analysis scratch.
 ```

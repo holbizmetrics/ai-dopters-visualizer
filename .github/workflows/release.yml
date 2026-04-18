@@ -34,7 +34,7 @@ jobs:
         run: |
           mkdir -p dist
           zip -r "dist/ai-dopters-visualizer-${{ steps.tag.outputs.name }}.zip" \
-              index.html README.md moons-of-saturn-energy.mp3 bands.json bands.js cover.jpg \
+              index.html README.md moons-of-saturn-energy.mp3 cover.jpg \
               -x "*.git*" "dist/*" ".github/*" "analysis/*"
 
       - name: Create GitHub Release
