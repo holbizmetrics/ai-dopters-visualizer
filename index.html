@@ -659,8 +659,15 @@
         // (Seed hue is hoisted to the top of main() for forward-ref use.)
         // ═══════════════════════════════════════════════════════
         float pulse = 0.15 + iSub*0.45 + iBass*0.25;
+        // Core: tight, bright, pulses with sub/bass.
         float core = exp(-r*r * (36.0 - pulse*14.0)) * (0.22 + pulse*0.75);
-        col += seed * core;
+        // Halo: wider gaussian with visible inside→outside gradient, makes the
+        // seed read as a glowing body rather than a pinpoint. Sigma ≈ 2x core.
+        float halo = exp(-r*r * 6.5) * (0.12 + pulse*0.22);
+        // Outer wash: very soft far-field so the darkening extends into the
+        // tunnel mouth. Gives the gradient its "apparent" body.
+        float wash = exp(-r*r * 1.8) * (0.04 + pulse*0.07);
+        col += seed * (core + halo + wash);
 
         // outer ring ripple, bass-driven — inherits the shifted seed hue
         float ring = exp(-pow((r - (0.20 + iBass*0.10))*18.0, 2.0)) * (iBass*0.55);
