@@ -454,12 +454,97 @@
         // by air-band so the color "shifts with parts of the music."
         // ═══════════════════════════════════════════════════════
         float angBin = floor(a*24.0/PI);
-        float streakRadial = hash21(vec2(angBin, floor(depth*3.0 - tunnelScroll*0.6)));
+        float depthBin = floor(depth*3.0 - tunnelScroll*0.6);
+        vec2  cellId = vec2(angBin, depthBin);
+        float streakRadial = hash21(cellId);
         streakRadial = step(0.85, streakRadial);
-        float cellHue = fract(angBin / 12.0 + iTime*0.04 + iMid*0.15);
+        // Per-cell hue wobble: ~40% of cells get a small sinusoidal hue
+        // offset on their own phase, so neighbours drift relative to
+        // each other and fall back. Subtle; not a full color change.
+        float wobSelect = step(0.60, hash21(cellId + 41.7));
+        float wobPhase  = hash21(cellId + 17.3) * 6.2832;
+        float hueWob    = sin(iTime * 0.9 + wobPhase) * 0.08 * wobSelect;
+        float cellHue   = fract(angBin / 12.0 + iTime*0.04 + iMid*0.15 + hueWob);
         vec3 cellRainbow = 0.5 + 0.5 * cos(6.2832 * (cellHue + vec3(0.0, 0.33, 0.67)));
         vec3 cellCol = mix(vec3(1.0, 0.85, 0.45), cellRainbow, 0.55 + iAir*0.4);
         col += cellCol * streakRadial * tunnelFade * (0.25 + iAir*0.8);
+
+        // ─── SIGNAL PULSE — a narrow front travels near→far through the
+        // tunnel every few seconds, tinting cells cyan-green as it passes.
+        // Uses the same streakRadial mask so it only lights the cells that
+        // would've been lit anyway — reads as a signal racing down the tube.
+        float pulsePhase = fract(iTime * 0.18);                      // ~5.5s period
+        float pulseFront = mix(0.8, 7.0, pulsePhase);                // depth range it sweeps
+        float pulseBand  = smoothstep(0.35, 0.05, abs(depth - pulseFront));
+        vec3  pulseTint  = vec3(0.25, 1.00, 0.75);                   // cyan-green
+        col += pulseTint * pulseBand * streakRadial * tunnelFade * (0.55 + iBass*0.4);
+
+        // ─── TRON BITS — a handful of glowing points that fly through
+        // the tube, far→near, on staggered lifecycles. Each bit picks a
+        // random angular slot per cycle and leaves a short trail behind.
+        for (int i = 0; i < 4; i++) {
+          float bitI      = float(i);
+          float bitRate   = 0.22;                                      // cycles/sec
+          float bitPhase  = fract(iTime * bitRate + bitI * 0.263);
+          float bitSlot   = floor(iTime * bitRate + bitI * 0.263);
+          float bitDepth  = mix(7.5, 0.35, bitPhase);                  // far → near
+          float bitAngle  = (hash21(vec2(bitSlot, bitI + 7.3)) - 0.5) * 6.2832;
+
+          float dAng = abs(a - bitAngle);
+          dAng = min(dAng, 6.2832 - dAng);
+          float dDep = depth - bitDepth;                               // >0 = behind bit
+
+          float head  = smoothstep(0.18, 0.0, dAng) * smoothstep(0.22, 0.0, abs(dDep));
+          float trail = smoothstep(0.08, 0.0, dAng) * exp(-max(dDep, 0.0) * 4.5) * step(0.0, dDep);
+          float bitMask = max(head, trail * 0.65);
+
+          float bitFade = smoothstep(0.0, 0.06, bitPhase) * smoothstep(0.88, 0.72, bitPhase);
+
+          float isAmber = step(0.5, hash21(vec2(bitSlot, bitI + 3.1)));
+          vec3  bitCol  = mix(vec3(0.30, 0.95, 1.00), vec3(1.00, 0.58, 0.10), isAmber);
+
+          col += bitCol * bitMask * bitFade * tunnelFade * 2.4;
+        }
+
+        // ─── TRON OCTAHEDRON BITS — the actual movie-style bit: rotating
+        // 8-pointed star (two diamonds at 45°) that grows as it "flies
+        // through" the tube, with a micro-jitter so it feels alive.
+        for (int j = 0; j < 2; j++) {
+          float obI     = float(j);
+          float obRate  = 0.15;                                         // ~6.6s cycle
+          float obPhase = fract(iTime * obRate + obI * 0.5 + 0.21);
+          float obSlot  = floor(iTime * obRate + obI * 0.5 + 0.21);
+
+          float obZ     = obPhase;                                      // 0=far/small, 1=near/big
+          float obSize  = 0.010 + obZ*obZ * 0.130;                      // accelerating growth
+          float obAng   = (hash21(vec2(obSlot, obI + 2.7)) - 0.5) * 6.2832;
+          vec2  obDir   = vec2(cos(obAng), sin(obAng));
+          vec2  obCen   = obDir * obZ*obZ * 0.55;                       // drift from centre → edge
+
+          // 12 Hz jitter
+          vec2 obJitter = (vec2(
+            hash21(vec2(floor(iTime * 12.0), obI * 3.7)),
+            hash21(vec2(floor(iTime * 12.0 + 11.0), obI * 5.1))
+          ) - 0.5) * 0.010;
+
+          vec2 bp = uv0 - obCen - obJitter;
+          bp = rot2(iTime * 1.8 + obI * 2.3) * bp;                      // spin
+
+          // 8-pointed star = two diamonds, 45° apart
+          float d1 = abs(bp.x) + abs(bp.y) - obSize;
+          vec2  bp2 = rot2(0.7854) * bp;
+          float d2 = abs(bp2.x) + abs(bp2.y) - obSize;
+          float thick = obSize * 0.13;
+          float line1 = smoothstep(thick, 0.0, abs(d1));
+          float line2 = smoothstep(thick, 0.0, abs(d2));
+          float obShape = max(line1, line2);
+          // Soft inner glow to fill the outline slightly
+          float obGlow = smoothstep(obSize * 1.2, 0.0, length(bp)) * 0.20;
+
+          float obFade = smoothstep(0.0, 0.06, obPhase) * smoothstep(1.0, 0.90, obPhase);
+          vec3  obCol  = vec3(0.45, 1.00, 1.00);                        // cyan
+          col += obCol * (obShape + obGlow) * obFade * 2.2;
+        }
 
         // ═══════════════════════════════════════════════════════
         // BANNER RING — scroller painted ONTO the tunnel wall.
