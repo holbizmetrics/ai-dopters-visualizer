@@ -400,25 +400,25 @@
         vec3 col = mix(vec3(0.006, 0.02, 0.05), vec3(0.0, 0.0, 0.0), smoothstep(0.0, 1.2, r));
 
         // ═══════════════════════════════════════════════════════
-        // SATURN ANCHOR — deep-background thematic silhouette.
-        // Off-center, faint, drifts slowly with camera bank.
-        // Rings: Y-flattened ellipse; body occludes its own ring.
+        // SATURN ANCHOR — world-anchored, drawn BEFORE tube/cells so
+        // the tunnel reads as in front of this distant body. Uses uv0
+        // (pre-drift, pre-rotation) so Saturn doesn't bank or rotate.
+        // Front half of ring (sd.y < 0) crosses OVER the body disc.
         // ═══════════════════════════════════════════════════════
-        // World-anchored: uses uv0 (pre-drift, pre-rotation), so Saturn
-        // stays put in space while the camera and tunnel move.
-        vec2 satCenter = vec2(0.68, -0.32);
+        vec2 satCenter = vec2(0.50, -0.25);
         vec2 sd = uv0 - satCenter;
         float satR = length(sd);
-        float satBody = smoothstep(0.190, 0.165, satR);
-        float satLight = clamp(0.40 - sd.x*0.95 - sd.y*0.25, 0.0, 1.0);
-        vec3  satHue = mix(vec3(0.12, 0.08, 0.05), vec3(0.72, 0.55, 0.32), satLight);
-        col += satHue * satBody * 0.55;
+        float satBody = smoothstep(0.205, 0.178, satR);
+        float satLight = clamp(0.42 - sd.x*0.95 - sd.y*0.25, 0.0, 1.0);
+        vec3  satHue = mix(vec3(0.10, 0.07, 0.04), vec3(0.82, 0.62, 0.36), satLight);
+        col += satHue * satBody * 0.65;
         // ring band — tilted ellipse (Y compressed reads as perspective)
-        vec2 rUV = sd; rUV.y *= 2.8;
+        vec2  rUV = sd; rUV.y *= 2.8;
         float rMag = length(rUV);
-        float ringBand = smoothstep(0.46, 0.435, rMag) - smoothstep(0.335, 0.310, rMag);
-        float ringVisible = ringBand * (1.0 - satBody);
-        col += vec3(0.82, 0.70, 0.48) * ringVisible * 0.40;
+        float ringBand = smoothstep(0.470, 0.440, rMag) - smoothstep(0.335, 0.305, rMag);
+        float frontHalf = step(0.0, -sd.y);
+        float ringAlpha = ringBand * max(frontHalf, 1.0 - satBody);
+        col += vec3(0.88, 0.74, 0.50) * ringAlpha * 0.25;
 
         // ═══════════════════════════════════════════════════════
         // HYPERSPACE CONDUIT — the classic 1993 polar tunnel.
@@ -485,16 +485,18 @@
         // a flash tracks its letter as the banner scrolls.
         // ═══════════════════════════════════════════════════════
         float cellIdx = mod(floor(banCoord * 120.0), 120.0);
-        for (int k = 0; k < 3; k++) {
+        for (int k = 0; k < 4; k++) {
           float kf      = float(k);
-          float slotId  = floor(iTime * 0.9 + kf * 0.37);
-          float pickH   = hash21(vec2(slotId, 0.37 + kf * 0.19));
+          float slotId  = floor(iTime * 0.7 + kf * 0.31);
+          float pickH   = hash21(vec2(slotId * 3.7, 0.37 + kf * 0.19));
           float pick    = floor(pickH * 120.0);
-          float phase   = fract(iTime * 0.9 + kf * 0.37);
-          float glowEnv = smoothstep(0.0, 0.08, phase) * (1.0 - smoothstep(0.22, 0.95, phase));
-          float match   = 1.0 - step(0.5, abs(cellIdx - pick));
+          float phase   = fract(iTime * 0.7 + kf * 0.31);
+          float glowEnv = smoothstep(0.0, 0.05, phase) * (1.0 - smoothstep(0.35, 1.00, phase));
+          // soft 2-cell match so a whole letter lights, not a sliver
+          float dist    = min(abs(cellIdx - pick), 120.0 - abs(cellIdx - pick));
+          float match   = 1.0 - smoothstep(0.6, 1.8, dist);
           vec3  glowTint = 0.5 + 0.5 * cos(6.2832 * (vec3(pickH, pickH + 0.33, pickH + 0.67)));
-          col += glowTint * textMask * bannerBand * tunnelFade * match * glowEnv * 4.0;
+          col += glowTint * textMask * bannerBand * tunnelFade * match * glowEnv * 7.0;
         }
 
         // faint nebula wash, low energy (now in post-swirl coords)
