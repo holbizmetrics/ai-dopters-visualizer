@@ -494,16 +494,16 @@
           dAng = min(dAng, 6.2832 - dAng);
           float dDep = depth - bitDepth;                               // >0 = behind bit
 
-          float head  = smoothstep(0.18, 0.0, dAng) * smoothstep(0.22, 0.0, abs(dDep));
-          float trail = smoothstep(0.08, 0.0, dAng) * exp(-max(dDep, 0.0) * 4.5) * step(0.0, dDep);
-          float bitMask = max(head, trail * 0.65);
+          float head  = smoothstep(0.09, 0.0, dAng) * smoothstep(0.10, 0.0, abs(dDep));
+          float trail = smoothstep(0.04, 0.0, dAng) * exp(-max(dDep, 0.0) * 6.5) * step(0.0, dDep);
+          float bitMask = max(head, trail * 0.55);
 
           float bitFade = smoothstep(0.0, 0.06, bitPhase) * smoothstep(0.88, 0.72, bitPhase);
 
           float isAmber = step(0.5, hash21(vec2(bitSlot, bitI + 3.1)));
           vec3  bitCol  = mix(vec3(0.30, 0.95, 1.00), vec3(1.00, 0.58, 0.10), isAmber);
 
-          col += bitCol * bitMask * bitFade * tunnelFade * 2.4;
+          col += bitCol * bitMask * bitFade * tunnelFade * 1.1;
         }
 
         // ─── TRON OCTAHEDRON BITS — the actual movie-style bit: rotating
@@ -515,8 +515,8 @@
           float obPhase = fract(iTime * obRate + obI * 0.5 + 0.21);
           float obSlot  = floor(iTime * obRate + obI * 0.5 + 0.21);
 
-          float obZ     = obPhase;                                      // 0=far/small, 1=near/big
-          float obSize  = 0.010 + obZ*obZ * 0.130;                      // accelerating growth
+          float obZ     = 1.0 - obPhase;                                // 1=near/big → 0=far/small
+          float obSize  = 0.008 + obZ*obZ * 0.045;                      // smaller max — keeps star readable
           float obAng   = (hash21(vec2(obSlot, obI + 2.7)) - 0.5) * 6.2832;
           vec2  obDir   = vec2(cos(obAng), sin(obAng));
           vec2  obCen   = obDir * obZ*obZ * 0.55;                       // drift from centre → edge
@@ -537,13 +537,19 @@
           float thick = obSize * 0.13;
           float line1 = smoothstep(thick, 0.0, abs(d1));
           float line2 = smoothstep(thick, 0.0, abs(d2));
-          float obShape = max(line1, line2);
-          // Soft inner glow to fill the outline slightly
-          float obGlow = smoothstep(obSize * 1.2, 0.0, length(bp)) * 0.20;
+          float obEdge = max(line1, line2);
+          // Fill only the INTERSECTION (central octagon where both
+          // diamonds overlap) — keeps the "two squares crossing"
+          // silhouette visible and just makes the middle feel solid.
+          float dInner = max(d1, d2);
+          float obBody = smoothstep(0.0, -obSize * 0.05, dInner);
+          // Outer halo — tighter + dimmer so the star outline isn't drowned
+          float obGlow = smoothstep(obSize * 1.4, obSize * 0.7, length(bp)) * 0.22;
 
           float obFade = smoothstep(0.0, 0.06, obPhase) * smoothstep(1.0, 0.90, obPhase);
           vec3  obCol  = vec3(0.45, 1.00, 1.00);                        // cyan
-          col += obCol * (obShape + obGlow) * obFade * 2.2;
+          // edge carries the shape; body + glow are subtle accents only
+          col += obCol * (obBody * 0.35 + obEdge * 1.00 + obGlow) * obFade * 0.65;
         }
 
         // ═══════════════════════════════════════════════════════
@@ -553,12 +559,16 @@
         // as painted-on-the-wall because it respects the tunnel's
         // 1/r depth compression — same coords as everything else.
         // ═══════════════════════════════════════════════════════
-        float tyd = fract(tunnelUV.y);
-        float bannerBand = smoothstep(0.03, 0.0, abs(tyd - 0.5));
+        // Single banner ring — no fract-repeats, no copies cutting the tube.
+        // Depth 2.0 → screen r ≈ 0.5, fits inside any reasonable viewport.
+        const float BANNER_DEPTH = 2.0;
+        const float BANNER_HALF  = 0.12;
+        float bannerOff  = depth - BANNER_DEPTH;
+        float bannerBand = smoothstep(BANNER_HALF, 0.0, abs(bannerOff));
         // stacked wrap: shift by time, sample the canvas horizontally
         float banCoord = tunnelUV.x * 2.0 + iTime*0.12;   // unwrapped
         float tx = fract(banCoord);
-        float ty = clamp((tyd - 0.45) / 0.10, 0.0, 1.0);
+        float ty = clamp((bannerOff + BANNER_HALF) / (2.0 * BANNER_HALF), 0.0, 1.0);
         float textMask = texture2D(iText, vec2(tx, ty)).a;
         vec3 bannerCol = mix(vec3(1.0, 0.9, 0.6), seed, 0.35);
         col += bannerCol * textMask * bannerBand * tunnelFade * (0.9 + iBass*1.2);
@@ -656,7 +666,7 @@
     composer.setSize(innerWidth, innerHeight);
     composer.addPass(new RenderPass(scene, camera));
 
-    const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.55, 0.55, 0.28);
+    const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.50, 0.42, 0.35);
     composer.addPass(bloom);
 
     // Chromatic aberration + grain pass
