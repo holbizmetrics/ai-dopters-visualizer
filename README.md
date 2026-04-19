@@ -4,7 +4,9 @@ A single-file, demoscene-caliber audio visualizer wrapped in an LCARS (Star-Trek
 
 Originally built for **"The Moons of Saturn · Energy"** (a Suno-generated track bundled with this repo), but works with anything you throw at it.
 
-Live: `index.html` — open it in a modern browser, no build step, no server required (though serving over HTTP is recommended for some browsers; see below).
+**Live:** https://holbizmetrics.github.io/ai-dopters-visualizer/ — open in a modern browser (desktop or phone), no build step, no install.
+
+Or run `index.html` locally — no server required for custom MP3s (though serving over HTTP is recommended for the bundled track on some browsers; see below).
 
 ---
 
